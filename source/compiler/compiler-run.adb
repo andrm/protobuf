@@ -20,6 +20,9 @@
 --  FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 --  DEALINGS IN THE SOFTWARE.
 
+with Ada.Characters.Wide_Wide_Latin_1;
+
+with League.String_Vectors;
 with League.Strings;
 
 with Google.Protobuf.Compiler.Plugin;
@@ -28,16 +31,50 @@ with Google.Protobuf.Descriptor;
 with PB_Support.Stdio_Streams;
 with Compiler.Context;
 with Compiler.File_Descriptors;
+with Compiler.Options;
 
 procedure Compiler.Run is
+   use type Compiler.Options.Runtime_Kind;
+
    Stream  : aliased PB_Support.Stdio_Streams.Stdio_Stream;
    Request : Google.Protobuf.Compiler.Plugin.Code_Generator_Request;
    Result  : Google.Protobuf.Compiler.Plugin.Code_Generator_Response;
+   Params  : Compiler.Options.Parameters;
+   Rules   : Compiler.Options.Rule_Set;
+   Errors  : League.String_Vectors.Universal_String_Vector;
 begin
    Stream.Initialize;
 
    Google.Protobuf.Compiler.Plugin.Code_Generator_Request'Read
      (Stream'Unchecked_Access, Request);
+
+   if Request.Parameter.Is_Set then
+      Compiler.Options.Parse_Parameter
+        (Request.Parameter.Value, Params, Errors);
+   end if;
+
+   if Params.Runtime = Compiler.Options.SPARK_Runtime then
+      for J in 1 .. Request.Proto_File.Length loop
+         Compiler.Options.Load_For_Proto
+           (Rules, Request.Proto_File (J).Name.Value, Params, Errors);
+      end loop;
+
+      if Errors.Is_Empty then
+         Errors.Append
+           (League.Strings.To_Universal_String
+              ("runtime=spark: code generation is not implemented yet"));
+      end if;
+   end if;
+
+   if not Errors.Is_Empty then
+      Result.Error :=
+        (True, Errors.Join (Ada.Characters.Wide_Wide_Latin_1.LF));
+
+      Google.Protobuf.Compiler.Plugin.Code_Generator_Response'Write
+        (Stream'Unchecked_Access, Result);
+
+      return;
+   end if;
 
    Compiler.Context.Populate_Named_Types
      (Request, Compiler.Context.Named_Types);
