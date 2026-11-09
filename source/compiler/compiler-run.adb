@@ -21,6 +21,7 @@
 --  DEALINGS IN THE SOFTWARE.
 
 with Ada.Characters.Wide_Wide_Latin_1;
+with Ada.Text_IO;
 
 with League.String_Vectors;
 with League.Strings;
@@ -29,6 +30,7 @@ with Google.Protobuf.Compiler.Plugin;
 with Google.Protobuf.Descriptor;
 
 with PB_Support.Stdio_Streams;
+with Compiler.Bounds;
 with Compiler.Context;
 with Compiler.File_Descriptors;
 with Compiler.Options;
@@ -41,7 +43,9 @@ procedure Compiler.Run is
    Result  : Google.Protobuf.Compiler.Plugin.Code_Generator_Response;
    Params  : Compiler.Options.Parameters;
    Rules   : Compiler.Options.Rule_Set;
+   Bounds  : Compiler.Bounds.Analysis;
    Errors  : League.String_Vectors.Universal_String_Vector;
+   Warnings : League.String_Vectors.Universal_String_Vector;
 begin
    Stream.Initialize;
 
@@ -58,6 +62,17 @@ begin
          Compiler.Options.Load_For_Proto
            (Rules, Request.Proto_File (J).Name.Value, Params, Errors);
       end loop;
+
+      if Errors.Is_Empty then
+         Compiler.Bounds.Analyze (Request, Rules, Bounds, Errors);
+         Compiler.Options.Report_Unused (Rules, Warnings);
+
+         for J in 1 .. Warnings.Length loop
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "warning: " & Warnings (J).To_UTF_8_String);
+         end loop;
+      end if;
 
       if Errors.Is_Empty then
          Errors.Append

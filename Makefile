@@ -38,8 +38,9 @@ check:
 	   /usr/include/google/protobuf/$$J.proto; done
 	gprbuild -P gnat/protobuf_runtime.gpr
 	@echo Run generator option tests
-	gprbuild -p -P gnat/compiler_options_test.gpr
+	gprbuild -p -P gnat/compiler_tests.gpr
 	.objs/compiler_tests/compiler_options_test source/compiler_tests/fixtures
+	.objs/compiler_tests/compiler_bounds_test
 	@echo Run regression tests
 	./testsuite/run_all.sh
 	@echo Run conformance test if any
