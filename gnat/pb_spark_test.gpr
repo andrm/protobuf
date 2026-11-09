@@ -1,0 +1,15 @@
+--  Tests build the runtime from source, with all checks and assertions on.
+
+project PB_SPARK_Test is
+   for Source_Dirs use
+     ("../source/spark_runtime", "../source/spark_runtime_tests");
+   for Object_Dir use "../.objs/spark_runtime_tests";
+   for Exec_Dir use "../.objs/spark_runtime_tests";
+   for Main use ("pb_spark_test.adb");
+   for Languages use ("Ada");
+   for Create_Missing_Dirs use "True";
+
+   package Compiler is
+      for Default_Switches ("Ada") use ("-gnatW8", "-g", "-gnata", "-gnatVa");
+   end Compiler;
+end PB_SPARK_Test;

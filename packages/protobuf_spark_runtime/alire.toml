@@ -1,0 +1,12 @@
+name = "protobuf_spark_runtime"
+description = "SPARK runtime for Ada Protobuf code, for light and bare-metal"
+version = "1.1.0-git"
+
+website = "https://github.com/reznikmm/protobuf"
+authors = ["Konsec GmbH"]
+licenses = "MIT"
+project-files = ["../../gnat/protobuf_spark_runtime.gpr"]
+tags = ["serialization", "marshalling", "protocol", "buffers", "spark", "embedded"]
+
+[configuration]
+disabled = true

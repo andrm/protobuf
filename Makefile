@@ -30,6 +30,9 @@ clean:
 	gprclean -q -P gnat/protoc_gen_ada.gpr
 	gprclean -q -P gnat/protobuf_runtime.gpr
 
+prove-spark:
+	gnatprove -P gnat/protobuf_spark_runtime.gpr --mode=all --level=2 -j0
+
 check:
 	@echo Compile some predefined .proto files
 	for J in any duration empty field_mask struct timestamp wrappers; do\
@@ -41,6 +44,9 @@ check:
 	gprbuild -p -P gnat/compiler_tests.gpr
 	.objs/compiler_tests/compiler_options_test source/compiler_tests/fixtures
 	.objs/compiler_tests/compiler_bounds_test
+	@echo Run SPARK runtime tests
+	gprbuild -p -P gnat/pb_spark_test.gpr
+	.objs/spark_runtime_tests/pb_spark_test
 	@echo Run regression tests
 	./testsuite/run_all.sh
 	@echo Run conformance test if any
