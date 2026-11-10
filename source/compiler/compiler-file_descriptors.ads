@@ -39,6 +39,16 @@ package Compiler.File_Descriptors is
       return League.Strings.Universal_String;
    --  Return base name for Ada package
 
+   function Package_Name
+     (Self : Google.Protobuf.Descriptor.File_Descriptor_Proto)
+      return League.Strings.Universal_String;
+   --  Return the name of the Ada package for a file
+
+   function Get_Prefix
+     (Self : Google.Protobuf.Descriptor.File_Descriptor_Proto)
+       return League.Strings.Universal_String;
+   --  Return the package of a file as a type name prefix, like .my.pkg
+
    function Specification_Text
      (Self    : Google.Protobuf.Descriptor.File_Descriptor_Proto;
       Request : Google.Protobuf.Compiler.Plugin.Code_Generator_Request)

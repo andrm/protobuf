@@ -43,6 +43,8 @@ package Compiler.Bounds is
       --  Capacity in bytes of a string or bytes field or element
       Count           : Natural := 0;
       --  Maximum number of elements of a repeated field
+      Max_Size        : Natural := 0;
+      --  Maximum encoded size of the field, including tags
       On_Unknown_Enum : Compiler.Options.Unknown_Enum_Policy :=
         Compiler.Options.Reject;
    end record;

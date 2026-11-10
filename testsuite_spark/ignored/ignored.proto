@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+message Partly {
+  int32 kept = 1;
+  string name = 2;
+  repeated int32 values = 3;
+  fixed64 big = 4;
+  bool also_kept = 5;
+}

@@ -40,10 +40,6 @@ package body Compiler.File_Descriptors is
      return League.Strings.Universal_String
        renames League.Strings.To_Universal_String;
 
-   function Package_Name
-     (Self : Google.Protobuf.Descriptor.File_Descriptor_Proto)
-      return League.Strings.Universal_String;
-
    function Dependency
      (Self    : Google.Protobuf.Descriptor.File_Descriptor_Proto;
       Request : Google.Protobuf.Compiler.Plugin.Code_Generator_Request)
@@ -53,12 +49,6 @@ package body Compiler.File_Descriptors is
    procedure Get_Used_Types
      (Self   : Google.Protobuf.Descriptor.File_Descriptor_Proto;
       Result : out Compiler.Context.String_Sets.Set);
-
-   function Get_Prefix
-     (Self : Google.Protobuf.Descriptor.File_Descriptor_Proto)
-       return League.Strings.Universal_String;
-   --  Return protobuf prefix for given file: the dot appended with package.
-   --  Like ".google.protobuf"
 
    ---------------
    -- Body_Text --

@@ -496,6 +496,9 @@ procedure Compiler_Bounds_Test is
          Check (B.Ignored, "ignored field");
          B := Compiler.Bounds.Field (Result, +"p.A.n");
          Check (B.Capacity = 0 and B.Count = 0, "inapplicable options");
+         Check (B.Max_Size = 11, "field size is recorded");
+         B := Compiler.Bounds.Field (Result, +"p.A.t");
+         Check (B.Max_Size = 6, "string field size is recorded");
       end;
    end Test_Errors;
 

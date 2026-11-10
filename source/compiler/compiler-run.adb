@@ -34,6 +34,7 @@ with Compiler.Bounds;
 with Compiler.Context;
 with Compiler.File_Descriptors;
 with Compiler.Options;
+with Compiler.SPARK_Files;
 
 procedure Compiler.Run is
    use type Compiler.Options.Runtime_Kind;
@@ -75,15 +76,24 @@ begin
       end if;
 
       if Errors.Is_Empty then
-         Errors.Append
-           (League.Strings.To_Universal_String
-              ("runtime=spark: code generation is not implemented yet"));
+         Compiler.Context.Populate_Named_Types
+           (Request, Compiler.Context.Named_Types);
+         Compiler.SPARK_Files.Generate (Request, Bounds, Result, Errors);
       end if;
    end if;
 
    if not Errors.Is_Empty then
       Result.Error :=
         (True, Errors.Join (Ada.Characters.Wide_Wide_Latin_1.LF));
+
+      Google.Protobuf.Compiler.Plugin.Code_Generator_Response'Write
+        (Stream'Unchecked_Access, Result);
+
+      return;
+   end if;
+
+   if Params.Runtime = Compiler.Options.SPARK_Runtime then
+      Result.Supported_Features := (True, 1);  --  FEATURE_PROTO3_OPTIONAL
 
       Google.Protobuf.Compiler.Plugin.Code_Generator_Response'Write
         (Stream'Unchecked_Access, Result);

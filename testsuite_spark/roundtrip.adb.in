@@ -1,0 +1,65 @@
+--  Decode a file, encode the message again and write the result to a file.
+--  run_all.sh fills in the package and the type of the message.
+
+with Ada.Command_Line;
+with Ada.Directories;
+with Ada.Streams.Stream_IO;
+with Ada.Text_IO;
+
+with PB_SPARK;
+with @PACKAGE@;
+
+procedure Roundtrip is
+   use type PB_SPARK.Index;
+   use type PB_SPARK.Status_Kind;
+   use type Ada.Streams.Stream_Element_Offset;
+
+   package IO renames Ada.Streams.Stream_IO;
+
+   subtype Offset is Ada.Streams.Stream_Element_Offset;
+
+   Input_Name  : constant String := Ada.Command_Line.Argument (1);
+   Output_Name : constant String := Ada.Command_Line.Argument (2);
+
+   Size   : constant Offset := Offset (Ada.Directories.Size (Input_Name));
+   Raw    : Ada.Streams.Stream_Element_Array (1 .. Size);
+   Input  : PB_SPARK.Byte_Array (1 .. PB_SPARK.Index (Size));
+   Output : PB_SPARK.Byte_Array (1 .. @PACKAGE@.@TYPE@_Max_Encoded_Size) :=
+     (others => 0);
+   Value  : @PACKAGE@.@TYPE@;
+   Status : PB_SPARK.Status_Kind;
+   Last   : PB_SPARK.Index;
+   File   : IO.File_Type;
+   Got    : Offset;
+begin
+   IO.Open (File, IO.In_File, Input_Name);
+   IO.Read (File, Raw, Got);
+   IO.Close (File);
+
+   for J in Raw'Range loop
+      Input (PB_SPARK.Index (J)) := PB_SPARK.Byte (Raw (J));
+   end loop;
+
+   @PACKAGE@.Decode (Input, Value, Status);
+
+   if Status /= PB_SPARK.OK then
+      Ada.Text_IO.Put_Line (PB_SPARK.Status_Kind'Image (Status));
+      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+      return;
+   end if;
+
+   @PACKAGE@.Encode (Value, Output, Last);
+
+   declare
+      Result : Ada.Streams.Stream_Element_Array (1 .. Offset (Last));
+   begin
+      for J in Result'Range loop
+         Result (J) := Ada.Streams.Stream_Element
+           (Output (PB_SPARK.Index (J)));
+      end loop;
+
+      IO.Create (File, IO.Out_File, Output_Name);
+      IO.Write (File, Result);
+      IO.Close (File);
+   end;
+end Roundtrip;

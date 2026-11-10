@@ -299,6 +299,10 @@ package body Compiler.Bounds is
                      Current : constant Size :=
                        Field_Size (Item, Bounds, Info.Is_Proto_3, Too_Big);
                   begin
+                     Result.Fields.Reference
+                       (Dotted (Info.Full_Name, Item.Name.Value)).Max_Size :=
+                         Natural (Current);
+
                      if Compiler.Field_Descriptors.Is_One_Of (Item) then
                         declare
                            Index : constant Natural :=

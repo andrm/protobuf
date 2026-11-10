@@ -1,8 +1,17 @@
 --  Choose a bare-metal target with --target=... and --RTS=... on the command
---  line of gprbuild. This project only compiles Ada, and uses no scenario
---  variables or generated configuration.
+--  line of gprbuild. This project only compiles Ada and uses no generated
+--  configuration.
+--
+--  Set PB_SPARK_RESTRICTIONS=enabled to check the runtime against the
+--  restrictions of light runtimes. They apply to a whole program once any
+--  unit is compiled with them, so they are off by default to let host
+--  programs use this library.
 
 library project Protobuf_SPARK_Runtime is
+
+   type Restrictions_Mode is ("disabled", "enabled");
+   Restrictions : Restrictions_Mode :=
+     external ("PB_SPARK_RESTRICTIONS", "disabled");
 
    for Source_Dirs use ("../source/spark_runtime");
    for Object_Dir use "../.objs/spark_runtime";
@@ -14,8 +23,14 @@ library project Protobuf_SPARK_Runtime is
 
    package Compiler is
       for Default_Switches ("Ada") use ("-gnatW8", "-O2", "-gnaty");
-      for Local_Configuration_Pragmas use
-        "../source/spark_runtime/restrictions.adc";
+
+      case Restrictions is
+         when "enabled" =>
+            for Local_Configuration_Pragmas use
+              "../source/spark_runtime/restrictions.adc";
+         when "disabled" =>
+            null;
+      end case;
    end Compiler;
 
    package Prove is

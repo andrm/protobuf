@@ -49,5 +49,7 @@ check:
 	.objs/spark_runtime_tests/pb_spark_test
 	@echo Run regression tests
 	./testsuite/run_all.sh
+	@echo Run SPARK output tests
+	./testsuite_spark/run_all.sh
 	@echo Run conformance test if any
 	./conformance.sh $(PROTOBUF_DIR)

@@ -154,8 +154,9 @@ package PB_SPARK.Wire with SPARK_Mode, Pure is
       Buffer : in out Byte_Array;
       Last   : in out Index)
      with Pre  => Valid_Buffer (Buffer)
-                  and then Last <= Buffer'Last - (Tag_Size (Field) + 10),
-          Post => Last in Last'Old + 2 .. Last'Old + Tag_Size (Field) + 10;
+                  and then Last <=
+                    Buffer'Last - (Tag_Size (Field) + Varint_Size (Value)),
+          Post => Last = Last'Old + Tag_Size (Field) + Varint_Size (Value);
 
    procedure Put_Varint_Option
      (Field  : Field_Number;
@@ -163,8 +164,10 @@ package PB_SPARK.Wire with SPARK_Mode, Pure is
       Buffer : in out Byte_Array;
       Last   : in out Index)
      with Pre  => Valid_Buffer (Buffer)
-                  and then Last <= Buffer'Last - (Tag_Size (Field) + 10),
-          Post => Last in Last'Old .. Last'Old + Tag_Size (Field) + 10;
+                  and then Last <=
+                    Buffer'Last - (Tag_Size (Field) + Varint_Size (Value)),
+          Post => Last in Last'Old
+                    .. Last'Old + Tag_Size (Field) + Varint_Size (Value);
    --  Write the field unless Value is zero
 
    procedure Put_Fixed_32_Field

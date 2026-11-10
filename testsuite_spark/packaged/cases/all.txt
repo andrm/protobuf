@@ -1,0 +1,11 @@
+buffer: 1
+last: 2
+pos: 3
+limit: 4
+status: 5
+field: 6
+wire: 7
+v: 8
+raw: 9
+start: 10
+end: 11

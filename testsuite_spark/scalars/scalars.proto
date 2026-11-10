@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+message Scalars {
+  int32 a = 1;
+  int64 b = 2;
+  uint32 c = 3;
+  uint64 d = 4;
+  sint32 e = 5;
+  sint64 f = 6;
+  bool g = 7;
+  fixed32 h = 8;
+  fixed64 i = 9;
+  sfixed32 j = 10;
+  sfixed64 k = 11;
+  float l = 12;
+  double m = 13;
+}

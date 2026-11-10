@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package acme.deep;
+
+message Item {
+  int32 buffer = 1;
+  int32 last = 2;
+  int32 pos = 3;
+  int32 limit = 4;
+  int32 status = 5;
+  int32 field = 6;
+  int32 wire = 7;
+  int32 v = 8;
+  int32 raw = 9;
+  int32 start = 10;
+  int32 end = 11;
+}

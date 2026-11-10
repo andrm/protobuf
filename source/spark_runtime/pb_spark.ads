@@ -53,6 +53,12 @@ package PB_SPARK with SPARK_Mode, Pure is
       Missing_Required,  --  A proto2 required field was not present
       Unknown_Enum);     --  An enum value this schema doesn't define
 
+   subtype Float_32_Bits is Interfaces.Unsigned_32;
+   --  IEEE bits of a float field. See PB_SPARK.Float_Bits to convert them.
+
+   subtype Float_64_Bits is Interfaces.Unsigned_64;
+   --  IEEE bits of a double field
+
    function Valid_Buffer (Buffer : Byte_Array) return Boolean is
      (Buffer'First = 1 and then Buffer'Last in Buffer_Last);
    --  All buffers start at 1
