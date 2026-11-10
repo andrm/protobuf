@@ -130,12 +130,14 @@ package body Compiler.SPARK_Messages is
    function Part_Parameters
      (Self   : Message_Descriptor;
       Prefix : Universal_String;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node;
 
    function Part_Actuals
      (Self   : Message_Descriptor;
       Prefix : Universal_String;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node;
 
@@ -146,17 +148,30 @@ package body Compiler.SPARK_Messages is
       Part   : Positive) return Natural;
 
    function Encode_Parameters (Tipe : Universal_String) return Node;
+   function Append_Parameters (Tipe : Universal_String) return Node;
+   function Decode_Parameters (Tipe : Universal_String) return Node;
+
+   function Make_Context
+     (Self         : Message_Descriptor;
+      Prefix       : Universal_String;
+      Package_Name : Universal_String;
+      Is_Proto_3   : Boolean) return Compiler.SPARK_Fields.Context is
+     ((Package_Name => Package_Name,
+       Message      => Key (Self, Prefix).Tail_From (2),
+       Is_Proto_3   => Is_Proto_3));
    function Merge_Parameters (Tipe : Universal_String) return Node;
 
    function Encode_Part
      (Self   : Message_Descriptor;
       Prefix : Universal_String;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node;
 
    function Merge_Part
      (Self   : Message_Descriptor;
       Prefix : Universal_String;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node;
 
@@ -223,6 +238,28 @@ package body Compiler.SPARK_Messages is
           In_Out_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
           Out_Parameter ("Last", "PB_SPARK.Index"))));
 
+   -----------------------
+   -- Append_Parameters --
+   -----------------------
+
+   function Append_Parameters (Tipe : Universal_String) return Node is
+     (F.New_List
+        ((F.New_Parameter
+            (Name            => N ("V"),
+             Type_Definition => N (Tipe)),
+          In_Out_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
+          In_Out_Parameter ("Last", "PB_SPARK.Index"))));
+
+   -----------------------
+   -- Decode_Parameters --
+   -----------------------
+
+   function Decode_Parameters (Tipe : Universal_String) return Node is
+     (F.New_List
+        ((In_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
+          Out_Parameter ("V", Tipe.To_Wide_Wide_String),
+          Out_Parameter ("Status", "PB_SPARK.Status_Kind"))));
+
    -----------------
    -- Encode_Part --
    -----------------
@@ -230,6 +267,7 @@ package body Compiler.SPARK_Messages is
    function Encode_Part
      (Self   : Message_Descriptor;
       Prefix : Universal_String;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node
    is
@@ -241,7 +279,7 @@ package body Compiler.SPARK_Messages is
       Spec   : constant Node := Specification
         (Name,
          F.New_List
-           ((Part_Parameters (Self, Prefix, Bounds, Part),
+           ((Part_Parameters (Self, Prefix, Ctx, Bounds, Part),
              In_Out_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
              In_Out_Parameter ("Last", "PB_SPARK.Index"))));
       Total  : Natural := 0;
@@ -253,7 +291,7 @@ package body Compiler.SPARK_Messages is
            (Lines,
             F.New_List
               (Compiler.SPARK_Fields.Encode
-                 (Nth_Field (Self, Prefix, Bounds, J)),
+                 (Nth_Field (Self, Prefix, Bounds, J), Ctx, Bounds),
                F.New_Pragma
                  (N ("Assert"),
                   N ("Last in Start .. Start + " & Image (Total)))));
@@ -361,6 +399,7 @@ package body Compiler.SPARK_Messages is
    function Merge_Part
      (Self   : Message_Descriptor;
       Prefix : Universal_String;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node
    is
@@ -392,7 +431,7 @@ package body Compiler.SPARK_Messages is
               (Paths,
                F.New_Case_Path
                  (Choice => N (Image (Natural (Item.Number.Value))),
-                  List   => Compiler.SPARK_Fields.Merge (Item)));
+                  List   => Compiler.SPARK_Fields.Merge (Item, Ctx, Bounds)));
          end;
       end loop;
 
@@ -444,6 +483,7 @@ package body Compiler.SPARK_Messages is
    function Part_Actuals
      (Self   : Message_Descriptor;
       Prefix : Universal_String;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node
    is
@@ -453,8 +493,8 @@ package body Compiler.SPARK_Messages is
       for J in Part_First (Part) .. Part_Last (Part, Count) loop
          Result := F.New_List
            (Result,
-            Compiler.SPARK_Fields.Actual
-              (Nth_Field (Self, Prefix, Bounds, J)));
+            Compiler.SPARK_Fields.Actuals
+              (Nth_Field (Self, Prefix, Bounds, J), Ctx));
       end loop;
 
       return Result;
@@ -489,6 +529,7 @@ package body Compiler.SPARK_Messages is
    function Part_Parameters
      (Self   : Message_Descriptor;
       Prefix : Universal_String;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node
    is
@@ -498,8 +539,8 @@ package body Compiler.SPARK_Messages is
       for J in Part_First (Part) .. Part_Last (Part, Count) loop
          Result := F.New_List
            (Result,
-            Compiler.SPARK_Fields.Parameter
-              (Nth_Field (Self, Prefix, Bounds, J)));
+            Compiler.SPARK_Fields.Parameters
+              (Nth_Field (Self, Prefix, Bounds, J), Ctx));
       end loop;
 
       return Result;
@@ -530,21 +571,35 @@ package body Compiler.SPARK_Messages is
    -----------------
 
    function Public_Spec
-     (Self   : Google.Protobuf.Descriptor.Descriptor_Proto;
-      Prefix : League.Strings.Universal_String;
-      Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access
+     (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Package_Name : League.Strings.Universal_String;
+      Is_Proto_3   : Boolean;
+      Bounds       : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access
    is
-      Tipe  : constant Universal_String := Spec_Name (Self, Prefix);
-      Max   : constant Universal_String := Tipe & "_Max_Encoded_Size";
-      Count : constant Natural := Fields_Of (Self, Prefix, Bounds);
-      Items : Node;
+      Ctx    : constant Compiler.SPARK_Fields.Context :=
+        Make_Context (Self, Prefix, Package_Name, Is_Proto_3);
+      Tipe   : constant Universal_String := Spec_Name (Self, Prefix);
+      Max    : constant Universal_String := Tipe & "_Max_Encoded_Size";
+      Count  : constant Natural := Fields_Of (Self, Prefix, Bounds);
+      Items  : Node;
+      Terms  : League.String_Vectors.Universal_String_Vector;
       Result : Node;
    begin
       for J in 1 .. Count loop
-         Items := F.New_List
-           (Items,
-            Compiler.SPARK_Fields.Component
-              (Nth_Field (Self, Prefix, Bounds, J)));
+         declare
+            Item : constant Google.Protobuf.Descriptor.Field_Descriptor_Proto
+              := Nth_Field (Self, Prefix, Bounds, J);
+            Term : constant Universal_String :=
+              Compiler.SPARK_Fields.Initialized_Term (Item, Ctx, Bounds);
+         begin
+            Items := F.New_List
+              (Items, Compiler.SPARK_Fields.Component (Item, Ctx));
+
+            if not Term.Is_Empty then
+               Terms.Append (Term);
+            end if;
+         end;
       end loop;
 
       Result := F.New_List
@@ -573,17 +628,20 @@ package body Compiler.SPARK_Messages is
          F.New_List
            ((F.New_Subprogram_Declaration
                (Specification => Specification
+                  (+"Append", Append_Parameters (Tipe)),
+                Aspects       => Contract
+                  (N (+Valid_Buffer & " and then Last <= Buffer'Last - "
+                      & Max),
+                   N ("Last in Last'Old .. Last'Old + " & Max))),
+             F.New_Subprogram_Declaration
+               (Specification => Specification
                   (+"Encode", Encode_Parameters (Tipe)),
                 Aspects       => Contract
                   (N (+Valid_Buffer & " and then Buffer'Last >= " & Max),
                    N ("Last <= " & Max))),
              F.New_Subprogram_Declaration
                (Specification => Specification
-                  (+"Decode",
-                   F.New_List
-                     ((In_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
-                       Out_Parameter ("V", Tipe.To_Wide_Wide_String),
-                       Out_Parameter ("Status", "PB_SPARK.Status_Kind")))),
+                  (+"Decode", Decode_Parameters (Tipe)),
                 Aspects       => Contract (N (Valid_Buffer))),
              F.New_Subprogram_Declaration
                (Specification => Specification
@@ -594,6 +652,20 @@ package body Compiler.SPARK_Messages is
       if Count = 0 then
          Result := F.New_List
            (Result, Warnings ("On", "*is not modified, could be IN*"));
+      end if;
+
+      if not Terms.Is_Empty then
+         Result := F.New_List
+           (Result,
+            F.New_Subprogram_Declaration
+              (Specification => F.New_Subprogram_Specification
+                 (Name       => N ("Is_Initialized"),
+                  Parameters => F.New_Parameter
+                    (Name => N ("V"), Type_Definition => N (Tipe)),
+                  Result     => N ("Boolean")),
+               Expression    => N (Terms.Join (" and then ")),
+               Comment       => +"Return True if no required field is "
+                 & "missing"));
       end if;
 
       return Result;
@@ -612,37 +684,44 @@ package body Compiler.SPARK_Messages is
    -----------------
 
    function Subprograms
-     (Self   : Google.Protobuf.Descriptor.Descriptor_Proto;
-      Prefix : League.Strings.Universal_String;
-      Bounds : Compiler.Bounds.Analysis) return Node_Vectors.Vector
+     (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Package_Name : League.Strings.Universal_String;
+      Is_Proto_3   : Boolean;
+      Bounds       : Compiler.Bounds.Analysis) return Node_Vectors.Vector
    is
+      Ctx   : constant Compiler.SPARK_Fields.Context :=
+        Make_Context (Self, Prefix, Package_Name, Is_Proto_3);
       Tipe  : constant Universal_String := Spec_Name (Self, Prefix);
       Count : constant Natural := Fields_Of (Self, Prefix, Bounds);
+      Needs : constant Boolean :=
+        Compiler.SPARK_Fields.Needs_Check (Key (Self, Prefix), Bounds);
 
-      Result      : Node_Vectors.Vector;
-      Clear_Lines : Node;
-      Encode_Calls : Node := F.New_Assignment (N ("Last"), N ("0"));
+      Result       : Node_Vectors.Vector;
+      Clear_Lines  : Node;
+      Append_Calls : Node;
       Merge_Paths  : Node;
       Total        : Natural := 0;
    begin
       for Part in 1 .. Parts (Count) loop
-         Result.Append (Encode_Part (Self, Prefix, Bounds, Part));
-         Result.Append (Merge_Part (Self, Prefix, Bounds, Part));
+         Result.Append (Encode_Part (Self, Prefix, Ctx, Bounds, Part));
+         Result.Append (Merge_Part (Self, Prefix, Ctx, Bounds, Part));
 
          Total := Total + Part_Size (Self, Prefix, Bounds, Part);
 
-         Encode_Calls := F.New_List
-           (Encode_Calls,
+         Append_Calls := F.New_List
+           (Append_Calls,
             F.New_List
               (F.New_Statement
                  (F.New_Apply
                     (N (Tipe & "_Encode_Part_" & Image (Part)),
                      F.New_List
-                       ((Part_Actuals (Self, Prefix, Bounds, Part),
+                       ((Part_Actuals (Self, Prefix, Ctx, Bounds, Part),
                          F.New_Argument_Association (N ("Buffer")),
                          F.New_Argument_Association (N ("Last")))))),
                F.New_Pragma
-                 (N ("Assert"), N ("Last <= " & Image (Total)))));
+                 (N ("Assert"),
+                  N ("Last in Start .. Start + " & Image (Total)))));
 
          Merge_Paths := F.New_List
            (Merge_Paths,
@@ -664,26 +743,122 @@ package body Compiler.SPARK_Messages is
       for J in 1 .. Count loop
          Clear_Lines := F.New_List
            (Clear_Lines,
-            Compiler.SPARK_Fields.Clear (Nth_Field (Self, Prefix, Bounds, J)));
+            Compiler.SPARK_Fields.Clear
+              (Nth_Field (Self, Prefix, Bounds, J), Ctx));
       end loop;
 
       if Count = 0 then
          Clear_Lines := F.New_Assignment (N ("V"), N ("(null record)"));
+         Append_Calls := F.New_Statement;
       end if;
 
       Merge_Paths := F.New_List
         (Merge_Paths,
          F.New_Case_Path (Choice => N ("others"), List => Skip_Call));
 
+      Result.Append
+        (F.New_Subprogram_Body
+           (Specification => Specification
+              (+"Clear", Out_Parameter ("V", Tipe.To_Wide_Wide_String)),
+            Statements    => Clear_Lines));
+
+      Result.Append
+        (F.New_Subprogram_Body
+           (Specification => Specification
+              (+"Append", Append_Parameters (Tipe)),
+            Declarations  =>
+              (if Count = 0 then null
+               else F.New_Variable
+                 (Name            => N ("Start"),
+                  Type_Definition => F.New_Selected_Name (+"PB_SPARK.Index"),
+                  Initialization  => N ("Last"),
+                  Is_Constant     => True,
+                  Aspects         => N ("Ghost"))),
+            Statements    => Append_Calls));
+
+      Result.Append
+        (F.New_Subprogram_Body
+           (Specification => Specification
+              (+"Encode", Encode_Parameters (Tipe)),
+            Statements    => F.New_List
+              (F.New_Assignment (N ("Last"), N ("0")),
+               F.New_Statement
+                 (F.New_Apply
+                    (N ("Append"),
+                     F.New_List
+                       ((F.New_Argument_Association (N ("V")),
+                         F.New_Argument_Association (N ("Buffer")),
+                         F.New_Argument_Association (N ("Last")))))))));
+
       declare
+         Decode_Lines : Node := F.New_List
+           ((F.New_Statement
+               (F.New_Apply
+                  (N ("Clear"), F.New_Argument_Association (N ("V")))),
+             Warnings
+               ("Off", "*is set by*but not used after the call",
+                "Decode reads the whole buffer"),
+             F.New_Statement
+               (F.New_Apply
+                  (N ("Merge"),
+                   F.New_List
+                     ((F.New_Argument_Association (N ("Buffer")),
+                       F.New_Argument_Association (N ("Buffer'Last")),
+                       F.New_Argument_Association (N ("Pos")),
+                       F.New_Argument_Association (N ("V")),
+                       F.New_Argument_Association (N ("Status")))))),
+             Warnings ("On", "*is set by*but not used after the call")));
+      begin
+         if Needs then
+            Decode_Lines := F.New_List
+              (Decode_Lines,
+               F.New_If
+                 (Condition => N
+                    ("Status = PB_SPARK.OK and then not Is_Initialized (V)"),
+                  Then_Path => F.New_Assignment
+                    (N ("Status"),
+                     F.New_Selected_Name (+"PB_SPARK.Missing_Required"))));
+         end if;
+
+         Result.Append
+           (F.New_Subprogram_Body
+              (Specification => Specification
+                 (+"Decode", Decode_Parameters (Tipe)),
+               Declarations  => F.New_Variable
+                 (Name            => N ("Pos"),
+                  Type_Definition => F.New_Selected_Name (+"PB_SPARK.Index"),
+                  Initialization  => N ("1")),
+               Statements    => Decode_Lines));
+      end;
+
+      declare
+         Dispatch : constant Node := Specification
+           (Tipe & "_Merge_Field",
+            F.New_List
+              ((In_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
+                In_Parameter ("Limit", "PB_SPARK.Index"),
+                In_Parameter ("Field", "Interfaces.Unsigned_32"),
+                In_Parameter ("Wire", "PB_SPARK.Wire.Wire_Type"),
+                In_Out_Parameter ("Pos", "PB_SPARK.Index"),
+                F.New_Parameter
+                  (Name            => N ("V"),
+                   Type_Definition => N (Tipe),
+                   Is_In           => True,
+                   Is_Out          => True),
+                Out_Parameter ("Status", "PB_SPARK.Status_Kind"))));
+         --  This is apart from the loop in Merge, because proving that loop
+         --  would otherwise take most of the time for a large message
+
+         Dispatch_Declaration : Node := F.New_Subprogram_Declaration
+           (Specification => Dispatch,
+            Aspects       => Contract
+              (N (Valid_Reader), N ("Pos in Pos'Old .. Limit + 1")));
+
          Loop_Body : constant Node := F.New_List
            ((F.New_Pragma
                (N ("Loop_Invariant"), N ("Pos in Pos'Loop_Entry .. Limit")),
              F.New_Pragma
-               (N ("Loop_Invariant"),
-                F.New_List
-                  (N ("Status"),
-                   F.New_Infix (+"=", F.New_Selected_Name (+"PB_SPARK.OK")))),
+               (N ("Loop_Invariant"), N ("Status = PB_SPARK.OK")),
              F.New_Pragma
                (N ("Loop_Variant"),
                 F.New_Argument_Association (N ("Pos"), N ("Increases"))),
@@ -710,27 +885,6 @@ package body Compiler.SPARK_Messages is
                        F.New_Argument_Association (N ("V")),
                        F.New_Argument_Association (N ("Status")))))),
              Return_Unless_OK));
-
-         --  This is apart from the loop in Merge because proving that loop
-         --  would otherwise take most of the time for a large message
-         Dispatch : constant Node := Specification
-           (Tipe & "_Merge_Field",
-            F.New_List
-              ((In_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
-                In_Parameter ("Limit", "PB_SPARK.Index"),
-                In_Parameter ("Field", "Interfaces.Unsigned_32"),
-                In_Parameter ("Wire", "PB_SPARK.Wire.Wire_Type"),
-                In_Out_Parameter ("Pos", "PB_SPARK.Index"),
-                F.New_Parameter
-                  (Name            => N ("V"),
-                   Type_Definition => N (Tipe),
-                   Is_In           => True,
-                   Is_Out          => True),
-                Out_Parameter ("Status", "PB_SPARK.Status_Kind"))));
-         Dispatch_Declaration : Node := F.New_Subprogram_Declaration
-           (Specification => Dispatch,
-            Aspects       => Contract
-              (N (Valid_Reader), N ("Pos in Pos'Old .. Limit + 1")));
       begin
          if Count = 0 then
             Dispatch_Declaration := F.New_List
@@ -750,71 +904,26 @@ package body Compiler.SPARK_Messages is
 
          Result.Append
            (F.New_Subprogram_Body
-               (Specification => Specification
-                  (+"Clear", Out_Parameter ("V", Tipe.To_Wide_Wide_String)),
-                Statements    => Clear_Lines));
-
-         Result.Append
-           (F.New_Subprogram_Body
-               (Specification => Specification
-                  (+"Encode", Encode_Parameters (Tipe)),
-                Statements    => Encode_Calls));
-
-         Result.Append
-           (F.New_Subprogram_Body
-               (Specification => Specification
-                  (+"Decode",
-                   F.New_List
-                     ((In_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
-                       Out_Parameter ("V", Tipe.To_Wide_Wide_String),
-                       Out_Parameter ("Status", "PB_SPARK.Status_Kind")))),
-                Declarations  => F.New_Variable
-                  (Name            => N ("Pos"),
-                   Type_Definition => F.New_Selected_Name (+"PB_SPARK.Index"),
-                   Initialization  => N ("1")),
-                Statements    => F.New_List
-                  ((F.New_Statement
-                      (F.New_Apply
-                         (N ("Clear"),
-                          F.New_Argument_Association (N ("V")))),
-                    Warnings
-                      ("Off", "*is set by*but not used after the call",
-                       "Decode reads the whole buffer"),
-                    F.New_Statement
-                      (F.New_Apply
-                         (N ("Merge"),
-                          F.New_List
-                            ((F.New_Argument_Association (N ("Buffer")),
-                              F.New_Argument_Association (N ("Buffer'Last")),
-                              F.New_Argument_Association (N ("Pos")),
-                              F.New_Argument_Association (N ("V")),
-                              F.New_Argument_Association (N ("Status")))))),
-                    Warnings
-                      ("On", "*is set by*but not used after the call")))));
-
-         Result.Append
-           (F.New_Subprogram_Body
-               (Specification => Specification
-                  (+"Merge", Merge_Parameters (Tipe)),
-                Declarations  => F.New_List
-                  (F.New_Variable
-                     (Name            => N ("Field"),
-                      Type_Definition => F.New_Selected_Name
-                        (+"Interfaces.Unsigned_32")),
-                   F.New_Variable
-                     (Name            => N ("Wire"),
-                      Type_Definition => F.New_Selected_Name
-                        (+"PB_SPARK.Wire.Wire_Type"))),
-                Statements    => F.New_List
-                  (F.New_Assignment
-                     (N ("Status"), F.New_Selected_Name (+"PB_SPARK.OK")),
-                   F.New_Loop
-                     (Condition  => F.New_List
-                        (N ("Pos"), F.New_Infix (+"<=", N ("Limit"))),
-                      Statements => Loop_Body))));
-
-         return Result;
+              (Specification => Specification
+                 (+"Merge", Merge_Parameters (Tipe)),
+               Declarations  => F.New_List
+                 (F.New_Variable
+                    (Name            => N ("Field"),
+                     Type_Definition => F.New_Selected_Name
+                       (+"Interfaces.Unsigned_32")),
+                  F.New_Variable
+                    (Name            => N ("Wire"),
+                     Type_Definition => F.New_Selected_Name
+                       (+"PB_SPARK.Wire.Wire_Type"))),
+               Statements    => F.New_List
+                 (F.New_Assignment
+                    (N ("Status"), F.New_Selected_Name (+"PB_SPARK.OK")),
+                  F.New_Loop
+                    (Condition  => N ("Pos <= Limit"),
+                     Statements => Loop_Body))));
       end;
+
+      return Result;
    end Subprograms;
 
 end Compiler.SPARK_Messages;

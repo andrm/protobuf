@@ -1,0 +1,10 @@
+id: 7
+retries: 0
+verbose: false
+ratio: 0
+scale: 0
+level: LOW
+big: 0
+child {
+  ok: false
+}

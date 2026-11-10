@@ -7,6 +7,11 @@
 #   cases/*.txt                 protobuf text format inputs to round trip
 #   any_order                   compare decoded text instead of bytes
 #   cases/*.expected            text format expected after a round trip
+#   cases/*.status              decoding must fail with this status
+#   cases/*.encode_as           encode the input as this message instead
+#   cases/*.append              text format encoded after the input, to test
+#                               merging of repeated occurrences
+#   check.adb                   a program to build and run with the code
 #
 # Generated code must compile under the runtime's restrictions and, when
 # gnatprove is installed, prove with no warnings.
@@ -107,19 +112,53 @@ project Roundtrip is
 end Roundtrip;
 G
 
+    if [ -f "$J/check.adb" ]; then
+      cp "$J/check.adb" "$OUT/rt/"
+      sed -i 's/for Main use ("roundtrip.adb");/for Main use ("roundtrip.adb", "check.adb");/' \
+        "$OUT/roundtrip.gpr"
+    fi
+
     if ! gprbuild -q -p -P "$OUT/roundtrip.gpr" > "$OUT/rt.log" 2>&1; then
       cat "$OUT/rt.log"
       fail "round trip program doesn't compile"
       return 1
     fi
 
+    if [ -f "$J/check.adb" ] && ! "$OUT/rt/check" > "$OUT/check.log" 2>&1
+    then
+      fail "check failed: $(cat "$OUT/check.log")"
+    fi
+
     for T in "$J"/cases/*.txt; do
-      local BASE IN=$OUT/in.bin RES=$OUT/out.bin
+      local BASE IN=$OUT/in.bin RES=$OUT/out.bin ENCODE_AS=$MESSAGE
       BASE=$(basename "$T" .txt)
       rm -f "$IN" "$RES"
 
-      if ! protoc -I"$J" --encode="$MESSAGE" "${PROTOS[@]}" < "$T" > "$IN"; then
+      if [ -f "$J/cases/$BASE.encode_as" ]; then
+        ENCODE_AS=$(cat "$J/cases/$BASE.encode_as")
+      fi
+
+      if ! protoc -I"$J" --encode="$ENCODE_AS" "${PROTOS[@]}" < "$T" > "$IN"
+      then
         fail "$BASE: bad test input"
+        continue
+      fi
+
+      if [ -f "$J/cases/$BASE.append" ] && ! protoc -I"$J" \
+          --encode="$ENCODE_AS" "${PROTOS[@]}" < "$J/cases/$BASE.append" \
+          >> "$IN"
+      then
+        fail "$BASE: bad appended input"
+        continue
+      fi
+
+      if [ -f "$J/cases/$BASE.status" ]; then
+        if "$OUT/rt/roundtrip" "$IN" "$RES" > "$OUT/run.log" 2>&1; then
+          fail "$BASE: decoding should have failed"
+        elif [ "$(cat "$OUT/run.log")" != "$(cat "$J/cases/$BASE.status")" ]
+        then
+          fail "$BASE: wrong status $(cat "$OUT/run.log")"
+        fi
         continue
       fi
 

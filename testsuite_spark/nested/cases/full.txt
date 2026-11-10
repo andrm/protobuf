@@ -1,0 +1,23 @@
+top_left {
+  at {
+    x: -3
+    y: 4
+  }
+  rounded: true
+}
+bottom_right {
+  at {
+    x: 100
+  }
+}
+depth: 7
+inner {
+  corner {
+    at {
+      y: -1
+    }
+  }
+  tag: 9
+}
+nothing {
+}

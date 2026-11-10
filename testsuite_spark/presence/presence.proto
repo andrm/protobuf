@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+message Maybe {
+  optional int32 a = 1;
+  optional bool b = 2;
+  optional double c = 3;
+  optional fixed64 d = 4;
+  int32 plain = 5;
+}

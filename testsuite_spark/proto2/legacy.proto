@@ -1,0 +1,39 @@
+syntax = "proto2";
+
+package legacy;
+
+enum Level {
+  LOW = 1;
+  HIGH = 2;
+}
+
+message Settings {
+  required int32 id = 1;
+  optional int32 retries = 2 [default = -3];
+  optional bool verbose = 3 [default = true];
+  optional double ratio = 4 [default = 1.5];
+  optional float scale = 5 [default = -inf];
+  optional Level level = 6 [default = HIGH];
+  optional uint64 big = 7 [default = 18446744073709551615];
+  optional Child child = 8;
+  repeated int32 ignored = 9 [packed = true];
+}
+
+message Child {
+  required bool ok = 1;
+  optional sint32 n = 2;
+}
+
+message Loose {
+  optional int32 id = 1;
+  optional Child child = 8;
+}
+
+message Looser {
+  optional int32 id = 1;
+  optional LooseChild child = 8;
+}
+
+message LooseChild {
+  optional sint32 n = 2;
+}

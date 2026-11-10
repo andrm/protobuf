@@ -1,1 +1,0 @@
-syntax = "proto3"; enum E { A = 0; } message M { }

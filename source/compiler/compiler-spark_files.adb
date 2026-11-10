@@ -21,6 +21,7 @@
 --  DEALINGS IN THE SOFTWARE.
 
 with Ada.Characters.Wide_Wide_Latin_1;
+with Ada.Containers.Vectors;
 
 with Ada_Pretty;
 
@@ -30,17 +31,20 @@ with Google.Protobuf.Descriptor;
 
 with Compiler.Context;
 with Compiler.File_Descriptors;
+with Compiler.SPARK_Enums;
 with Compiler.SPARK_Fields;
 with Compiler.SPARK_Messages;
 
 package body Compiler.SPARK_Files is
 
    use type League.Strings.Universal_String;
+   use type Google.Protobuf.Descriptor.PB_Type;
 
    subtype Universal_String is League.Strings.Universal_String;
    subtype String_Vector is League.String_Vectors.Universal_String_Vector;
    subtype File_Descriptor is
      Google.Protobuf.Descriptor.File_Descriptor_Proto;
+   subtype Message_Descriptor is Google.Protobuf.Descriptor.Descriptor_Proto;
    subtype Node is Ada_Pretty.Node_Access;
 
    F : Ada_Pretty.Factory renames Compiler.Context.Factory;
@@ -50,22 +54,56 @@ package body Compiler.SPARK_Files is
 
    LF : constant Wide_Wide_Character := Ada.Characters.Wide_Wide_Latin_1.LF;
 
+   type Message_Item is record
+      Descriptor : Message_Descriptor;
+      Prefix     : Universal_String;  --  Type name of the enclosing scope
+   end record;
+
+   package Message_Vectors is new Ada.Containers.Vectors
+     (Positive, Message_Item);
+
+   type Enum_Item is record
+      Descriptor : Google.Protobuf.Descriptor.Enum_Descriptor_Proto;
+      Prefix     : Universal_String;
+   end record;
+
+   package Enum_Vectors is new Ada.Containers.Vectors (Positive, Enum_Item);
+
    function SPARK_Pragma return Node is
      (F.New_Pragma (F.New_Name (+"SPARK_Mode"), F.New_Name (+"On")));
-
-   function Clauses (Runtime_Units : Wide_Wide_String) return Node;
-   --  Return with clauses of a generated unit
-
-   procedure Check_Supported
-     (File   : File_Descriptor;
-      Bounds : Compiler.Bounds.Analysis;
-      Errors : in out League.String_Vectors.Universal_String_Vector);
 
    procedure Add_Lines
      (Text   : in out String_Vector;
       Item   : Node;
       Indent : Boolean := True);
    --  Render a declaration and append it to Text, followed by an empty line
+
+   procedure Collect
+     (File     : File_Descriptor;
+      Messages : out Message_Vectors.Vector;
+      Enums    : out Enum_Vectors.Vector);
+   --  Return all types of a file. A message comes after the messages of the
+   --  same file that its fields use, because Ada needs them declared first.
+
+   procedure Check_Supported
+     (File     : File_Descriptor;
+      Messages : Message_Vectors.Vector;
+      Bounds   : Compiler.Bounds.Analysis;
+      Errors   : in out League.String_Vectors.Universal_String_Vector);
+
+   function Clauses
+     (File     : File_Descriptor;
+      Messages : Message_Vectors.Vector;
+      Bounds   : Compiler.Bounds.Analysis) return Node;
+   --  Return context clauses of the units of a file
+
+   function Full_Name
+     (Prefix : Universal_String;
+      Name   : Universal_String) return Universal_String is
+     (Universal_String'(Prefix & "." & Name).Tail_From (2));
+
+   function Is_Proto_3 (File : File_Descriptor) return Boolean is
+     (File.Syntax.Is_Set and then File.Syntax.Value = +"proto3");
 
    ---------------
    -- Add_Lines --
@@ -96,49 +134,69 @@ package body Compiler.SPARK_Files is
    ---------------------
 
    procedure Check_Supported
-     (File   : File_Descriptor;
-      Bounds : Compiler.Bounds.Analysis;
-      Errors : in out League.String_Vectors.Universal_String_Vector)
+     (File     : File_Descriptor;
+      Messages : Message_Vectors.Vector;
+      Bounds   : Compiler.Bounds.Analysis;
+      Errors   : in out League.String_Vectors.Universal_String_Vector)
    is
-      Prefix : constant Universal_String :=
-        Compiler.File_Descriptors.Get_Prefix (File);
-      Is_Proto_3 : constant Boolean :=
-        File.Syntax.Is_Set and then File.Syntax.Value = +"proto3";
+      Type_Names : Compiler.Context.String_Sets.Set;
    begin
-      for J in 1 .. File.Enum_Type.Length loop
-         Errors.Append
-           (Prefix & "." & File.Enum_Type (J).Name.Value
-            & ": enums are not supported by the SPARK back end yet");
-      end loop;
-
-      for J in 1 .. File.Message_Type.Length loop
+      for Item of Messages loop
          declare
-            Message : constant Google.Protobuf.Descriptor.Descriptor_Proto :=
-              File.Message_Type (J);
+            Message : constant Message_Descriptor := Item.Descriptor;
             Full    : constant Universal_String :=
-              Universal_String'(Prefix & "." & Message.Name.Value).Tail_From
-                (2);
+              Full_Name (Item.Prefix, Message.Name.Value);
+            Ctx     : constant Compiler.SPARK_Fields.Context :=
+              (Package_Name => Compiler.File_Descriptors.Package_Name (File),
+               Message      => Full,
+               Is_Proto_3   => Is_Proto_3 (File));
+            Names   : Compiler.Context.String_Sets.Set;
          begin
-            if Message.Nested_Type.Length > 0
-              or else Message.Enum_Type.Length > 0
-            then
-               Errors.Append
-                 (Full & ": nested types are not supported by the SPARK "
-                  & "back end yet");
-            end if;
+            Type_Names.Include
+              (Compiler.Context.Named_Types
+                 (Item.Prefix & "." & Message.Name.Value)
+                 .Ada_Type.Type_Name.To_Lowercase);
 
             for K in 1 .. Message.Field.Length loop
                declare
-                  Name : constant Universal_String :=
-                    Full & "." & Message.Field (K).Name.Value;
+                  Field : constant
+                    Google.Protobuf.Descriptor.Field_Descriptor_Proto :=
+                      Message.Field (K);
+                  Name  : constant Universal_String :=
+                    Full & "." & Field.Name.Value;
                begin
                   if not Compiler.Bounds.Field (Bounds, Name).Ignored then
                      Compiler.SPARK_Fields.Check_Supported
-                       (Message.Field (K), Name, Is_Proto_3, Errors);
+                       (Field, Name, Errors);
+
+                     declare
+                        List : constant String_Vector :=
+                          Compiler.SPARK_Fields.Component_Names (Field, Ctx);
+                     begin
+                        for C in 1 .. List.Length loop
+                           if Names.Contains (List (C).To_Lowercase) then
+                              Errors.Append
+                                (Name & ": its Ada component " & List (C)
+                                 & " clashes with another field: add "
+                                 & "type:ignore to one of them");
+                           else
+                              Names.Insert (List (C).To_Lowercase);
+                           end if;
+                        end loop;
+                     end;
                   end if;
                end;
             end loop;
          end;
+      end loop;
+
+      for Name of Compiler.SPARK_Messages.Subprogram_Names loop
+         if Type_Names.Contains (+Name.all) then
+            Errors.Append
+              (Compiler.File_Descriptors.Package_Name (File)
+               & ": a message can't be named like a generated subprogram ("
+               & (+Name.all) & ")");
+         end if;
       end loop;
    end Check_Supported;
 
@@ -146,16 +204,167 @@ package body Compiler.SPARK_Files is
    -- Clauses --
    -------------
 
-   function Clauses (Runtime_Units : Wide_Wide_String) return Node is
-     (F.New_List
-        ((F.New_With (F.New_Selected_Name (+"Interfaces")),
-          F.New_With (F.New_Selected_Name (+Runtime_Units)),
-          F.New_With (F.New_Selected_Name (+"PB_SPARK.Wire")),
-          F.New_Use
-            (F.New_Selected_Name (+"PB_SPARK.Index"), Use_Type => True),
-          F.New_Use
-            (F.New_Selected_Name (+"PB_SPARK.Status_Kind"),
-             Use_Type => True))));
+   function Clauses
+     (File     : File_Descriptor;
+      Messages : Message_Vectors.Vector;
+      Bounds   : Compiler.Bounds.Analysis) return Node
+   is
+      Own    : constant Universal_String :=
+        Compiler.File_Descriptors.Package_Name (File);
+      Imported : Compiler.Context.String_Sets.Set;
+      Result : Node := F.New_With (F.New_Selected_Name (+"Interfaces"));
+   begin
+      if Messages.Is_Empty then
+         return Result;
+      end if;
+
+      for Item of Messages loop
+         for K in 1 .. Item.Descriptor.Field.Length loop
+            declare
+               Field : constant
+                 Google.Protobuf.Descriptor.Field_Descriptor_Proto :=
+                   Item.Descriptor.Field (K);
+               Owner : constant Universal_String :=
+                 Compiler.SPARK_Fields.Type_Package (Field);
+            begin
+               if not Owner.Is_Empty
+                 and then Owner /= Own
+                 and then not Compiler.Bounds.Field
+                   (Bounds,
+                    Full_Name (Item.Prefix, Item.Descriptor.Name.Value)
+                    & "." & Field.Name.Value).Ignored
+               then
+                  Imported.Include (Owner);
+               end if;
+            end;
+         end loop;
+      end loop;
+
+      Result := F.New_List
+        (Result,
+         F.New_List
+           ((F.New_With (F.New_Selected_Name (+"PB_SPARK")),
+             F.New_With (F.New_Selected_Name (+"PB_SPARK.Wire")))));
+
+      for Name of Imported loop
+         Result := F.New_List (Result, F.New_With (F.New_Selected_Name (Name)));
+      end loop;
+
+      return F.New_List
+        (Result,
+         F.New_List
+           (F.New_Use
+              (F.New_Selected_Name (+"PB_SPARK.Index"), Use_Type => True),
+            F.New_Use
+              (F.New_Selected_Name (+"PB_SPARK.Status_Kind"),
+               Use_Type => True)));
+   end Clauses;
+
+   -------------
+   -- Collect --
+   -------------
+
+   procedure Collect
+     (File     : File_Descriptor;
+      Messages : out Message_Vectors.Vector;
+      Enums    : out Enum_Vectors.Vector)
+   is
+      All_Messages : Message_Vectors.Vector;
+      Done         : Compiler.Context.String_Sets.Set;
+      Skipped      : Compiler.Context.String_Sets.Set;
+
+      procedure Add (Prefix : Universal_String; Item : Message_Descriptor);
+      procedure Place (Item : Message_Item);
+
+      ---------
+      -- Add --
+      ---------
+
+      procedure Add (Prefix : Universal_String; Item : Message_Descriptor) is
+         Key : constant Universal_String := Prefix & "." & Item.Name.Value;
+      begin
+         --  Map entries and groups are only reachable through fields that
+         --  are reported or ignored, so they get no type.
+         if Item.Options.Is_Set
+           and then Item.Options.Value.Map_Entry.Is_Set
+           and then Item.Options.Value.Map_Entry.Value
+         then
+            Skipped.Include (Key);
+         else
+            All_Messages.Append ((Item, Prefix));
+         end if;
+
+         for J in 1 .. Item.Field.Length loop
+            if Item.Field (J).PB_Type.Value =
+              Google.Protobuf.Descriptor.TYPE_GROUP
+            then
+               Skipped.Include (Item.Field (J).Type_Name.Value);
+            end if;
+         end loop;
+
+         for J in 1 .. Item.Enum_Type.Length loop
+            Enums.Append ((Item.Enum_Type (J), Key));
+         end loop;
+
+         for J in 1 .. Item.Nested_Type.Length loop
+            Add (Key, Item.Nested_Type (J));
+         end loop;
+      end Add;
+
+      -----------
+      -- Place --
+      -----------
+
+      procedure Place (Item : Message_Item) is
+         Key : constant Universal_String :=
+           Item.Prefix & "." & Item.Descriptor.Name.Value;
+      begin
+         if Done.Contains (Key) or Skipped.Contains (Key) then
+            return;
+         end if;
+
+         Done.Insert (Key);
+
+         --  Cycles are rejected before this, so this always ends
+         for J in 1 .. Item.Descriptor.Field.Length loop
+            declare
+               Field : constant
+                 Google.Protobuf.Descriptor.Field_Descriptor_Proto :=
+                   Item.Descriptor.Field (J);
+            begin
+               if Field.Type_Name.Is_Set then
+                  for Other of All_Messages loop
+                     if Other.Prefix & "." & Other.Descriptor.Name.Value
+                       = Field.Type_Name.Value
+                     then
+                        Place (Other);
+                     end if;
+                  end loop;
+               end if;
+            end;
+         end loop;
+
+         Messages.Append (Item);
+      end Place;
+
+      Prefix : constant Universal_String :=
+        Compiler.File_Descriptors.Get_Prefix (File);
+   begin
+      Messages.Clear;
+      Enums.Clear;
+
+      for J in 1 .. File.Enum_Type.Length loop
+         Enums.Append ((File.Enum_Type (J), Prefix));
+      end loop;
+
+      for J in 1 .. File.Message_Type.Length loop
+         Add (Prefix, File.Message_Type (J));
+      end loop;
+
+      for Item of All_Messages loop
+         Place (Item);
+      end loop;
+   end Collect;
 
    --------------
    -- Generate --
@@ -169,12 +378,18 @@ package body Compiler.SPARK_Files is
    is
       Found : constant Natural := Errors.Length;
    begin
+      Compiler.SPARK_Fields.Register (Request);
+
       for J in 1 .. Request.File_To_Generate.Length loop
-         Check_Supported
-           (Compiler.Context.Get_File
-              (Request, Request.File_To_Generate.Element (J)),
-            Bounds,
-            Errors);
+         declare
+            File     : constant File_Descriptor := Compiler.Context.Get_File
+              (Request, Request.File_To_Generate.Element (J));
+            Messages : Message_Vectors.Vector;
+            Enums    : Enum_Vectors.Vector;
+         begin
+            Collect (File, Messages, Enums);
+            Check_Supported (File, Messages, Bounds, Errors);
+         end;
       end loop;
 
       if Errors.Length /= Found then
@@ -183,28 +398,40 @@ package body Compiler.SPARK_Files is
 
       for J in 1 .. Request.File_To_Generate.Length loop
          declare
-            File   : constant File_Descriptor := Compiler.Context.Get_File
+            File     : constant File_Descriptor := Compiler.Context.Get_File
               (Request, Request.File_To_Generate.Element (J));
-            Base   : constant Universal_String :=
+            Base     : constant Universal_String :=
               Compiler.File_Descriptors.File_Name (File);
-            Prefix : constant Universal_String :=
-              Compiler.File_Descriptors.Get_Prefix (File);
-            Name   : constant Universal_String :=
+            Name     : constant Universal_String :=
               Compiler.File_Descriptors.Package_Name (File);
-            Spec   : String_Vector;
-            Impl   : String_Vector;
-            Item   : Google.Protobuf.Compiler.Plugin.File;
+            Messages : Message_Vectors.Vector;
+            Enums    : Enum_Vectors.Vector;
+            Spec     : String_Vector;
+            Impl     : String_Vector;
+            Context  : Node;
+            Item     : Google.Protobuf.Compiler.Plugin.File;
          begin
-            Add_Lines (Spec, Clauses ("PB_SPARK"), Indent => False);
+            Collect (File, Messages, Enums);
+            Context := Clauses (File, Messages, Bounds);
+
+            Add_Lines (Spec, Context, Indent => False);
             Spec.Append ("package " & Name & " is");
             Spec.Append (+"");
             Add_Lines (Spec, SPARK_Pragma);
 
-            for K in 1 .. File.Message_Type.Length loop
+            for Enum of Enums loop
+               Add_Lines
+                 (Spec,
+                  Compiler.SPARK_Enums.Public_Spec
+                    (Enum.Descriptor, Enum.Prefix));
+            end loop;
+
+            for Message of Messages loop
                Add_Lines
                  (Spec,
                   Compiler.SPARK_Messages.Public_Spec
-                    (File.Message_Type (K), Prefix, Bounds));
+                    (Message.Descriptor, Message.Prefix, Name,
+                     Is_Proto_3 (File), Bounds));
             end loop;
 
             Spec.Append ("end " & Name & ";");
@@ -213,15 +440,23 @@ package body Compiler.SPARK_Files is
             Item.Content := (True, Spec.Join (LF));
             Result.File.Append (Item);
 
-            if File.Message_Type.Length > 0 then
-               Add_Lines (Impl, Clauses ("PB_SPARK"), Indent => False);
+            if not Messages.Is_Empty or not Enums.Is_Empty then
+               Add_Lines (Impl, Context, Indent => False);
                Impl.Append ("package body " & Name & " is");
                Impl.Append (+"");
                Add_Lines (Impl, SPARK_Pragma);
 
-               for K in 1 .. File.Message_Type.Length loop
+               for Enum of Enums loop
+                  Add_Lines
+                    (Impl,
+                     Compiler.SPARK_Enums.Subprograms
+                       (Enum.Descriptor, Enum.Prefix));
+               end loop;
+
+               for Message of Messages loop
                   for Next of Compiler.SPARK_Messages.Subprograms
-                    (File.Message_Type (K), Prefix, Bounds)
+                    (Message.Descriptor, Message.Prefix, Name,
+                     Is_Proto_3 (File), Bounds)
                   loop
                      Add_Lines (Impl, Next);
                   end loop;

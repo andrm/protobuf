@@ -1,0 +1,4 @@
+color: RED
+finish: GLOSS
+accent: NONE
+last: DARK

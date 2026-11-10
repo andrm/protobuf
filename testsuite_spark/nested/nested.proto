@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package shapes;
+
+import "base.proto";
+
+message Box {
+  message Corner {
+    Point at = 1;
+    bool rounded = 2;
+  }
+  Corner top_left = 1;
+  Corner bottom_right = 2;
+  int32 depth = 3;
+  Inner inner = 4;
+  Empty nothing = 5;
+}
+
+message Inner {
+  Box.Corner corner = 1;
+  fixed32 tag = 2;
+}
+
+message Empty {
+}

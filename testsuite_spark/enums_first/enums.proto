@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package colors;
+
+enum Color {
+  option allow_alias = true;
+  NONE = 0;
+  RED = 1;
+  CRIMSON = 1;
+  GREEN = 5;
+  BLUE = 1000;
+  DARK = -7;
+}
+
+message Paint {
+  enum Finish {
+    MATTE = 0;
+    GLOSS = 2;
+  }
+  Color color = 1;
+  Finish finish = 2;
+  optional Color accent = 3;
+  Color last = 4;
+}

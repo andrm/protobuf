@@ -1,1 +1,0 @@
-syntax = "proto3"; message I {} message M { I i = 1; }

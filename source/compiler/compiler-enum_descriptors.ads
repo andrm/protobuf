@@ -43,4 +43,11 @@ package Compiler.Enum_Descriptors is
 
    function Get_Literal (Value : Integer) return Ada_Pretty.Node_Access;
 
+   function Literal_Name
+     (Self  : Google.Protobuf.Descriptor.Enum_Descriptor_Proto;
+      Index : Positive;
+      Name  : League.Strings.Universal_String)
+      return League.Strings.Universal_String;
+   --  Return literal for given enum type as string, Name is type name.
+
 end Compiler.Enum_Descriptors;

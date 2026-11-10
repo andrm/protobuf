@@ -42,13 +42,6 @@ package body Compiler.Enum_Descriptors is
       return League.Strings.Universal_String;
    --  Return default value for given enum type as string, Name is type name.
 
-   function Literal_Name
-     (Self  : Google.Protobuf.Descriptor.Enum_Descriptor_Proto;
-      Index : Positive;
-      Name  : League.Strings.Universal_String)
-      return League.Strings.Universal_String;
-   --  Return literal for given enum type as string, Name is type name.
-
    function Max_Value
      (Self : Google.Protobuf.Descriptor.Enum_Descriptor_Proto) return Integer;
    --  Maximum representation value

@@ -41,17 +41,31 @@ package Compiler.SPARK_Messages is
    --  Declarations that are rendered one by one, because rendering a large
    --  document at once overflows the stack of the pretty printer
 
+   Subprogram_Names : constant array (1 .. 6) of
+     access constant Wide_Wide_String :=
+       (new Wide_Wide_String'("clear"),
+        new Wide_Wide_String'("append"),
+        new Wide_Wide_String'("encode"),
+        new Wide_Wide_String'("decode"),
+        new Wide_Wide_String'("merge"),
+        new Wide_Wide_String'("is_initialized"));
+   --  Names of subprograms declared for every message, in lower case
+
    function Public_Spec
-     (Self   : Google.Protobuf.Descriptor.Descriptor_Proto;
-      Prefix : League.Strings.Universal_String;
-      Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access;
+     (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Package_Name : League.Strings.Universal_String;
+      Is_Proto_3   : Boolean;
+      Bounds       : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access;
    --  Return the type of a message and its subprograms. Prefix is the type
    --  name prefix of the message, like .my.pkg
 
    function Subprograms
-     (Self   : Google.Protobuf.Descriptor.Descriptor_Proto;
-      Prefix : League.Strings.Universal_String;
-      Bounds : Compiler.Bounds.Analysis) return Node_Vectors.Vector;
+     (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Package_Name : League.Strings.Universal_String;
+      Is_Proto_3   : Boolean;
+      Bounds       : Compiler.Bounds.Analysis) return Node_Vectors.Vector;
    --  Return the subprogram bodies of a message
 
 end Compiler.SPARK_Messages;
