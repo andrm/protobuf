@@ -30,8 +30,13 @@ clean:
 	gprclean -q -P gnat/protoc_gen_ada.gpr
 	gprclean -q -P gnat/protobuf_runtime.gpr
 
+# Fails on any unproved check, any GNATprove warning, and any assumption or
+# proof justification in the SPARK runtime
 prove-spark:
-	gnatprove -P gnat/protobuf_spark_runtime.gpr --mode=all --level=2 -j0
+	! grep -n -i -E 'pragma +(Assume|Annotate)|Assume *=>' \
+	  source/spark_runtime/*.ad[sb]
+	gnatprove -P gnat/protobuf_spark_runtime.gpr --mode=all --level=2 -j0 \
+	  --report=fail --warnings=error --checks-as-errors=on
 
 check:
 	@echo Compile some predefined .proto files
@@ -53,3 +58,5 @@ check:
 	./testsuite_spark/run_all.sh
 	@echo Run conformance test if any
 	./conformance.sh $(PROTOBUF_DIR)
+	@echo Run SPARK conformance test if any, as a diagnostic
+	-./conformance_spark.sh $(PROTOBUF_DIR)

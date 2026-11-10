@@ -13,8 +13,9 @@
 #                               merging of repeated occurrences
 #   check.adb                   a program to build and run with the code
 #
-# Generated code must compile under the runtime's restrictions and, when
-# gnatprove is installed, prove with no warnings.
+# Generated code must compile under the runtime's restrictions, contain no
+# pragma Assume or Annotate and, when gnatprove is installed, prove with no
+# warnings. Set REQUIRE_PROOF=1 to fail when gnatprove is not installed.
 #
 # Usage: run_all.sh [OUTPUT_DIRECTORY [TEST...]]
 
@@ -77,6 +78,19 @@ G
   if ! gprbuild -q -c -p -P "$OUT/generated.gpr" > "$OUT/build.log" 2>&1; then
     cat "$OUT/build.log"
     fail "generated code doesn't compile"
+    return 1
+  fi
+
+  if grep -n -i -E 'pragma +(Assume|Annotate)|Assume *=>' "$OUT"/gen/*.ad[sb] \
+    > "$OUT/assume.log"
+  then
+    cat "$OUT/assume.log"
+    fail "generated code has assumptions or proof justifications"
+    return 1
+  fi
+
+  if [ -n "$REQUIRE_PROOF" ] && ! command -v gnatprove > /dev/null; then
+    fail "gnatprove is not installed"
     return 1
   fi
 

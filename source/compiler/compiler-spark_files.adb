@@ -402,14 +402,20 @@ package body Compiler.SPARK_Files is
 
          Done.Insert (Key);
 
-         --  Cycles are rejected before this, so this always ends
+         --  Cycles are rejected before this, so this always ends. An ignored
+         --  field may be what breaks a cycle, so it adds no dependency.
          for J in 1 .. Item.Descriptor.Field.Length loop
             declare
                Field : constant
                  Google.Protobuf.Descriptor.Field_Descriptor_Proto :=
                    Item.Descriptor.Field (J);
             begin
-               if Field.Type_Name.Is_Set then
+               if Field.Type_Name.Is_Set
+                 and then not Compiler.Bounds.Field
+                   (Bounds,
+                    Full_Name (Item.Prefix, Item.Descriptor.Name.Value)
+                    & "." & Field.Name.Value).Ignored
+               then
                   for Other of All_Messages loop
                      if Other.Prefix & "." & Other.Descriptor.Name.Value
                        = Field.Type_Name.Value

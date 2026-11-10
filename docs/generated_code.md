@@ -333,3 +333,232 @@ for Foo use (VALUE_A => 0, VALUE_B => 5, VALUE_C => 1234);
 
 package Foo_Vectors is new PB_Support.Vectors (Foo);
 ```
+
+## SPARK Output
+
+With `runtime=spark` the compiler generates SPARK packages instead. They
+use no heap, exceptions, secondary stack, finalization, tasking or
+`Ada.Streams`, so they work with light and bare-metal Ada runtimes. They
+depend only on the SPARK runtime (`gnat/protobuf_spark_runtime.gpr`, crate
+`protobuf_spark_runtime`), not on Matreshka League.
+
+```sh
+protoc --ada_out=out --ada_opt=runtime=spark,options=my.options my.proto
+```
+
+Without `runtime=spark` the generated code is the same as before.
+
+### Plugin Parameters
+
+The parameter given with `--ada_opt` is a comma-separated list:
+
+| Parameter                | Meaning |
+| ------------------------ | ------- |
+| `runtime=spark`          | Generate SPARK code. The default is `runtime=league` |
+| `options=<file>`         | Read generator options from this file. `%s` stands for the name of the `.proto` file without its extension. Can be given more than once |
+| `options_path=<dir>`     | Look for options files in this directory. Can be given more than once. The default is the current directory |
+| `ignore_unknown_options` | Don't report unknown keys in options files |
+
+Without `options=`, the file `%s.options` is read if it exists. A file named
+without `%s` must exist, because it can only be there on purpose.
+
+### Options Files
+
+The SPARK output has no unbounded fields, so every string, bytes, repeated
+and map field needs a bound. Bounds are given in an options file, in a
+format close to that of nanopb:
+
+```
+# Comments start with "#" or "//"
+my.pkg.Message.name    max_length:32
+Message.items          max_count:8
+Message.*              max_size:16
+Message.debug_info     type:ignore
+*.status               on_unknown_enum:first
+```
+
+Each line holds a pattern and `key:value` pairs. A pattern is matched
+against the full name of a field (`my.pkg.Message.field`), its name without
+the package (`Message.field`) and the name of its `.proto` file. `*` matches
+any sequence of characters, dots included, and `?` matches one character.
+When several lines match a field, later lines override earlier ones. A
+pattern that matches no field causes a warning.
+
+| Key               | Applies to       | Meaning |
+| ----------------- | ---------------- | ------- |
+| `max_length`      | string           | Capacity in bytes of UTF-8 text |
+| `max_size`        | string, bytes    | Capacity in bytes. For strings the capacity is `N-1`, as in nanopb, where it includes a terminating zero |
+| `max_count`       | repeated, map    | Maximum number of elements or entries |
+| `type`            | any field        | `default` or `static`: generate the field. `ignore`: don't generate it, and skip it like an unknown field when decoding |
+| `on_unknown_enum` | proto3 enum      | `reject` (the default): decoding fails with `Unknown_Enum`. `first`: the field keeps its default value |
+
+`max_length` and `max_size` can't be on the same line. `callback` and
+`pointer` types are not supported. A required field can't be ignored.
+
+The compiler checks the whole schema, including imported files, and reports
+all problems at once in `CodeGeneratorResponse.error`:
+
+* a string, bytes or repeated field without a bound;
+* a `group` field that isn't ignored;
+* recursive messages, with the cycle, for example
+  `google.protobuf.Value.list_value -> google.protobuf.ListValue.values ->
+  google.protobuf.Value`. Ignoring one field of the cycle breaks it;
+* a message whose maximum encoded size is over 2^30 bytes;
+* names that would clash in Ada.
+
+### Generated Declarations
+
+For each message `Blah` the package declares:
+
+```ada
+   type Blah is record ... end record;
+
+   Blah_Max_Encoded_Size : constant := 42;
+
+   procedure Clear (V : out Blah);
+
+   procedure Encode
+    (V      : Blah;
+     Buffer : in out PB_SPARK.Byte_Array;
+     Last   : out PB_SPARK.Index)
+     with Pre  =>
+       PB_SPARK.Valid_Buffer (Buffer)
+         and then Buffer'Last >= Blah_Max_Encoded_Size,
+     Post => Last <= Blah_Max_Encoded_Size;
+
+   procedure Append
+    (V      : Blah;
+     Buffer : in out PB_SPARK.Byte_Array;
+     Last   : in out PB_SPARK.Index);
+   --  Encode after Last, which must leave room for Blah_Max_Encoded_Size
+
+   procedure Decode
+    (Buffer : PB_SPARK.Byte_Array;
+     V      : out Blah;
+     Status : out PB_SPARK.Status_Kind)
+     with Pre => PB_SPARK.Valid_Buffer (Buffer);
+
+   procedure Merge
+    (Buffer : PB_SPARK.Byte_Array;
+     Limit  : PB_SPARK.Index;
+     Pos    : in out PB_SPARK.Index;
+     V      : in out Blah;
+     Status : out PB_SPARK.Status_Kind);
+   --  Decode Buffer (Pos .. Limit) into V, as a repeated occurrence of the
+   --  message would
+```
+
+Buffers are arrays of `Interfaces.Unsigned_8` indexed by `PB_SPARK.Index`,
+starting at 1. `Encode` can't fail when the buffer has room for
+`Blah_Max_Encoded_Size` bytes, the size of the largest message that fits
+the bounds. Only decoding, which reads untrusted input, returns a status.
+`Decode` clears the message first and, for proto2, checks required fields,
+which `Is_Initialized (V)` also reports.
+
+```ada
+declare
+   Buffer : PB_SPARK.Byte_Array (1 .. Foo.Bar.Blah_Max_Encoded_Size);
+   Last   : PB_SPARK.Index;
+   Data   : Foo.Bar.Blah;
+   Status : PB_SPARK.Status_Kind;
+begin
+   Foo.Bar.Encode (Data, Buffer, Last);                --  Serializing
+   Foo.Bar.Decode (Buffer (1 .. Last), Data, Status);  --  Parsing
+
+   if Status /= PB_SPARK.OK then
+      ...
+   end if;
+end;
+```
+
+| Status             | Meaning |
+| ------------------ | ------- |
+| `OK`               | The message was decoded |
+| `Truncated`        | The input ends in the middle of a value |
+| `Malformed`        | The input is not valid protobuf: a varint over 10 bytes, a key over 5 bytes, field number 0 or above 2^29-1, wire type 6 or 7, unbalanced or too deeply nested groups |
+| `Limit_Exceeded`   | The input doesn't fit the bounds of the options file |
+| `Invalid_UTF8`     | A proto3 string is not valid UTF-8 |
+| `Missing_Required` | A proto2 required field is missing |
+| `Unknown_Enum`     | A proto3 enum field holds a value the schema doesn't define, with `on_unknown_enum:reject` |
+
+Decoding accepts fields in any order and packed or unpacked repeated
+fields. It skips unknown fields and fields with the wrong wire type,
+including unknown groups nested up to 32 deep. When a field occurs more
+than once, the last scalar wins, messages are merged and repeated fields
+are appended to, as protobuf requires. Encoding writes fields in the order
+of the `.proto` file.
+
+Fields map to components like this:
+
+| .proto field | Ada components |
+| ------------ | -------------- |
+| `int32`, `sint32`, `sfixed32` | `Interfaces.Integer_32` |
+| `int64`, `sint64`, `sfixed64` | `Interfaces.Integer_64` |
+| `uint32`, `fixed32` | `Interfaces.Unsigned_32` |
+| `uint64`, `fixed64` | `Interfaces.Unsigned_64` |
+| `bool` | `Boolean` |
+| `float`, `double` | `PB_SPARK.Float_32_Bits`, `PB_SPARK.Float_64_Bits` |
+| `string`, `bytes` | a record with `Length` and `Data (1 .. Capacity)` |
+| enum | the Ada enumeration, see below |
+| message | the message record |
+| `optional`, proto2 singular, proto3 message | `Has_Foo : Boolean` and `Foo` |
+| `repeated`, map | `Foo : array (1 .. Max_Count)` and `Foo_Count` |
+| `oneof kind` | `Kind`, a discriminated record with discriminant `Kind`, which is `Kind_Not_Set` or `Foo_Kind` for field `foo` |
+
+`float` and `double` fields hold IEEE bits, so the generated code never
+uses floating point and keeps NaNs, infinities and `-0.0` intact.
+`PB_SPARK.Float_Bits` converts between bits and `IEEE_Float_32`/`64`.
+Proto2 defaults are the initial values of the components.
+
+A map is a repeated field of entries with `Key` and `Value` components.
+Entries are kept in input order, duplicate keys included, so a lookup
+should use the last entry with the key, as protobuf does.
+
+For each enum `Foo` the package also declares `Foo_To_Wire` and
+`Foo_From_Wire`. They convert with a `case` statement rather than
+`Unchecked_Conversion`, so decoding can't create an invalid enum value.
+Unknown values of proto2 enums are dropped, like unknown fields.
+
+### What Is Proved
+
+`gnatprove --mode=all --level=2` proves the runtime and the generated code
+at the Silver level: no run-time error can happen on any input and there
+are no reads of uninitialized data. There is no recursion and every `while`
+loop has a proved variant, so `Decode` and `Merge` always end. The
+contracts above are proved too, so a buffer of `Blah_Max_Encoded_Size`
+bytes is always large enough for `Encode`. There is no `pragma Assume` and
+no unproved check. The generated code suppresses only GNATprove flow
+warnings about values that are set but not used. Proof is per schema, so
+prove the code generated for yours. `testsuite_spark/run_all.sh` shows the
+switches to use.
+
+That decoding gives back what was encoded is not proved. Tests check it:
+`testsuite_spark/run_all.sh` round-trips `protoc`-encoded input, and
+`conformance_spark.sh` runs Google's conformance tests against code
+generated for `test_messages_proto2.proto` and `test_messages_proto3.proto`.
+
+These are trusted rather than proved:
+
+* The body of `PB_SPARK.Float_Bits`, the only unit with `SPARK_Mode => Off`,
+  because SPARK doesn't allow converting bits to floating-point values.
+  Only applications that call it depend on it.
+* The Ada compiler and runtime, and GNATprove.
+* `protoc-gen-ada` itself. Its output is proved each time GNATprove runs
+  on it.
+* Stack usage, which SPARK doesn't check. Large bounds make large records,
+  so pass them by reference and check the stack with `-fstack-usage`.
+
+To check the runtime against the restrictions of light runtimes in
+`source/spark_runtime/restrictions.adc`, build it with
+`PB_SPARK_RESTRICTIONS=enabled`. The restrictions apply to a whole program,
+so they are off by default to let host programs use the runtime.
+
+### Not Supported
+
+* Unbounded fields
+* Recursive messages, except by ignoring a field of the cycle
+* Groups, except by ignoring them
+* Extensions: their fields are skipped as unknown fields
+* Keeping unknown fields for re-encoding, which the League output doesn't
+  do either
+* JSON and text format

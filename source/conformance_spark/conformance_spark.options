@@ -1,0 +1,41 @@
+# Generator options for the SPARK conformance testee. See conformance_spark.sh.
+#
+# The SPARK output has no unbounded fields, so every string, bytes, repeated
+# and map field gets a bound here. Inputs that go over a bound fail decoding
+# with Limit_Exceeded, which the testee reports as a runtime error. Fields
+# the SPARK output can't represent are ignored and so skipped like unknown
+# fields. Both cause expected failures, listed in ada_spark_failing_tests.txt.
+
+# conformance.proto: the protocol between the test runner and the testee.
+# Only protobuf payloads are supported, so the other payloads are ignored
+# and a request carrying one is answered as skipped.
+conformance.TestStatus.*                     max_length:64
+conformance.FailureSet.test                  max_count:1
+conformance.ConformanceRequest.json_payload  type:ignore
+conformance.ConformanceRequest.jspb_payload  type:ignore
+conformance.ConformanceRequest.text_payload  type:ignore
+conformance.ConformanceRequest.protobuf_payload max_size:65536
+conformance.ConformanceRequest.message_type  max_length:128
+conformance.ConformanceResponse.*            max_length:1024
+conformance.ConformanceResponse.json_payload type:ignore
+conformance.ConformanceResponse.jspb_payload type:ignore
+conformance.ConformanceResponse.text_payload type:ignore
+conformance.ConformanceResponse.protobuf_payload max_size:1048576
+
+# Bounds shared by the test messages and the well-known types they use
+protobuf_test_messages.*  max_count:16 max_size:65
+google.protobuf.*         max_count:4 max_size:65
+
+# Recursion is broken by ignoring the recursive fields
+protobuf_test_messages.*.NestedMessage.corecursive           type:ignore
+protobuf_test_messages.*.NestedMessage.optional_corecursive  type:ignore
+protobuf_test_messages.*.recursive_message                   type:ignore
+protobuf_test_messages.*.optional_recursive_message          type:ignore
+google.protobuf.Value.struct_value                           type:ignore
+google.protobuf.Value.list_value                             type:ignore
+
+# Groups are not supported
+protobuf_test_messages.proto2.TestAllTypesProto2.data                 type:ignore
+protobuf_test_messages.proto2.TestAllTypesProto2.multiwordgroupfield  type:ignore
+protobuf_test_messages.proto2.TestAllRequiredTypesProto2.data         type:ignore
+protobuf_test_messages.proto2.UnknownToTestAllTypes.optionalgroup     type:ignore

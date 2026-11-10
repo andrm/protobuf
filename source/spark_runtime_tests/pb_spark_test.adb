@@ -352,6 +352,12 @@ procedure PB_SPARK_Test is
       Key_Test
         ((16#80#, 16#80#, 16#80#, 16#80#, 16#10#),
          Malformed, 0, Varint, "field number too large");
+      Key_Test
+        ((16#88#, 16#80#, 16#80#, 16#80#, 16#00#),
+         OK, 1, Varint, "padded 5 byte key");
+      Key_Test
+        ((16#88#, 16#80#, 16#80#, 16#80#, 16#80#, 16#00#),
+         Malformed, 0, Varint, "padded 6 byte key");
       Key_Test ((1 => 16#80#), Truncated, 0, Varint, "unterminated key");
 
       Pos := 1;

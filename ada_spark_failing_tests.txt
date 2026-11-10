@@ -1,0 +1,23 @@
+# Conformance tests that fail for code generated with runtime=spark. See
+# conformance_spark.sh. These follow from documented limits of the SPARK
+# output, not from bugs.
+
+# Unknown fields are skipped, not kept, so they are missing from the output.
+Required.Proto2.ProtobufInput.UnknownVarint.ProtobufOutput
+Required.Proto2.ProtobufInput.UnknownOrdering.ProtobufOutput
+Required.Proto2.ProtobufInput.MessageSetEncoding.UnknownExtension.ProtobufOutput
+Required.Proto3.ProtobufInput.UnknownVarint.ProtobufOutput
+Required.Proto3.ProtobufInput.UnknownOrdering.ProtobufOutput
+
+# Extensions are not supported, so MessageSet items are skipped.
+Required.Proto2.ProtobufInput.ValidMessageSetEncoding.ProtobufOutput
+Required.Proto2.ProtobufInput.ValidMessageSetEncoding.OutOfOrderGroupsEntries.ProtobufOutput
+
+# NestedMessage.corecursive is ignored to break the recursion between
+# TestAllTypesProto2/3 and NestedMessage, and these tests set it.
+Required.Proto2.ProtobufInput.RepeatedScalarMessageMerge.ProtobufOutput
+Required.Proto2.ProtobufInput.ValidDataMap.STRING.MESSAGE.MergeValue.ProtobufOutput
+Required.Proto2.ProtobufInput.ValidDataOneof.MESSAGE.Merge.ProtobufOutput
+Required.Proto3.ProtobufInput.RepeatedScalarMessageMerge.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataMap.STRING.MESSAGE.MergeValue.ProtobufOutput
+Required.Proto3.ProtobufInput.ValidDataOneof.MESSAGE.Merge.ProtobufOutput

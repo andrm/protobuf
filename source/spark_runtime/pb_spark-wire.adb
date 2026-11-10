@@ -243,6 +243,7 @@ package body PB_SPARK.Wire with SPARK_Mode is
       Wire   : out Wire_Type;
       Status : out Status_Kind)
    is
+      Start  : constant Index := Pos;
       Value  : Unsigned_64;
       Number : Unsigned_64;
       Kind   : Unsigned_64;
@@ -258,7 +259,10 @@ package body PB_SPARK.Wire with SPARK_Mode is
       Number := Shift_Right (Value, 3);
       Kind := Value and 7;
 
-      if Number not in 1 .. Unsigned_64 (Field_Number'Last) or else Kind > 5
+      --  A key takes at most 5 bytes, even when padded with zero groups
+      if Pos - Start > Tag_Length'Last
+        or else Number not in 1 .. Unsigned_64 (Field_Number'Last)
+        or else Kind > 5
       then
          Status := Malformed;
          return;

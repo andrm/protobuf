@@ -29,3 +29,22 @@ jobs:
         run: alr -C protobuf exec make check
       - name: Run demo
         run: alr -C protobuf/demo run
+  prove:
+    runs-on: ubuntu-latest
+    name: Prove SPARK output
+    steps:
+      - run: sudo apt install -y protobuf-compiler
+      - uses: actions/checkout@v2
+        with:
+          path: protobuf
+      - uses: alire-project/setup-alire@v5
+      - name: Install gnatprove
+        run: |
+          alr -n install gnatprove
+          echo "$HOME/.alire/bin" >> $GITHUB_PATH
+      - name: Build project
+        run: alr -C protobuf build
+      - name: Prove the SPARK runtime
+        run: alr -C protobuf exec -- make prove-spark
+      - name: Prove and round-trip SPARK output tests
+        run: alr -C protobuf exec -- env REQUIRE_PROOF=1 ./testsuite_spark/run_all.sh

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+// An ignored field breaks the cycle, as with google.protobuf.Value. Branch
+// must still be declared after Tree, which it uses.
+message Tree {
+  int32 size = 1;
+  Branch parent = 2;
+}
+
+message Branch {
+  Tree left = 1;
+  int32 weight = 2;
+}
