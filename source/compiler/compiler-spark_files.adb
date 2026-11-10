@@ -80,6 +80,7 @@ package body Compiler.SPARK_Files is
 
    procedure Collect
      (File     : File_Descriptor;
+      Bounds   : Compiler.Bounds.Analysis;
       Messages : out Message_Vectors.Vector;
       Enums    : out Enum_Vectors.Vector);
    --  Return all types of a file. A message comes after the messages of the
@@ -88,6 +89,7 @@ package body Compiler.SPARK_Files is
    procedure Check_Supported
      (File     : File_Descriptor;
       Messages : Message_Vectors.Vector;
+      Enums    : Enum_Vectors.Vector;
       Bounds   : Compiler.Bounds.Analysis;
       Errors   : in out League.String_Vectors.Universal_String_Vector);
 
@@ -96,6 +98,16 @@ package body Compiler.SPARK_Files is
       Messages : Message_Vectors.Vector;
       Bounds   : Compiler.Bounds.Analysis) return Node;
    --  Return context clauses of the units of a file
+
+   procedure Declared_Names
+     (File         : File_Descriptor;
+      Messages     : Message_Vectors.Vector;
+      Enums        : Enum_Vectors.Vector;
+      Bounds       : Compiler.Bounds.Analysis;
+      Types        : out String_Vector;
+      Overloadable : out String_Vector);
+   --  Return names that the package of a file declares: names of types and
+   --  constants, and names that can be overloaded
 
    function Full_Name
      (Prefix : Universal_String;
@@ -136,66 +148,90 @@ package body Compiler.SPARK_Files is
    procedure Check_Supported
      (File     : File_Descriptor;
       Messages : Message_Vectors.Vector;
+      Enums    : Enum_Vectors.Vector;
       Bounds   : Compiler.Bounds.Analysis;
       Errors   : in out League.String_Vectors.Universal_String_Vector)
    is
-      Type_Names : Compiler.Context.String_Sets.Set;
+      Package_Name : constant Universal_String :=
+        Compiler.File_Descriptors.Package_Name (File);
+      Types        : String_Vector;
+      Overloadable : String_Vector;
+      Type_Names   : Compiler.Context.String_Sets.Set;
+      Reported     : Compiler.Context.String_Sets.Set;
+
+      procedure Report (Name : Universal_String; Text : Wide_Wide_String);
+
+      procedure Report (Name : Universal_String; Text : Wide_Wide_String) is
+      begin
+         if not Reported.Contains (Name.To_Lowercase) then
+            Reported.Insert (Name.To_Lowercase);
+            Errors.Append (Package_Name & ": " & Name & Text);
+         end if;
+      end Report;
+
    begin
       for Item of Messages loop
          declare
             Message : constant Message_Descriptor := Item.Descriptor;
-            Full    : constant Universal_String :=
-              Full_Name (Item.Prefix, Message.Name.Value);
             Ctx     : constant Compiler.SPARK_Fields.Context :=
-              (Package_Name => Compiler.File_Descriptors.Package_Name (File),
-               Message      => Full,
-               Is_Proto_3   => Is_Proto_3 (File));
+              Compiler.SPARK_Messages.Make_Context
+                (Message, Item.Prefix, Package_Name, Is_Proto_3 (File));
             Names   : Compiler.Context.String_Sets.Set;
          begin
-            Type_Names.Include
-              (Compiler.Context.Named_Types
-                 (Item.Prefix & "." & Message.Name.Value)
-                 .Ada_Type.Type_Name.To_Lowercase);
+            for Next of Compiler.SPARK_Fields.Items (Message, Ctx, Bounds) loop
+               Compiler.SPARK_Fields.Check_Supported
+                 (Next, Ctx, Bounds, Errors);
 
-            for K in 1 .. Message.Field.Length loop
                declare
-                  Field : constant
-                    Google.Protobuf.Descriptor.Field_Descriptor_Proto :=
-                      Message.Field (K);
-                  Name  : constant Universal_String :=
-                    Full & "." & Field.Name.Value;
+                  List : constant String_Vector :=
+                    Compiler.SPARK_Fields.Component_Names (Next, Ctx);
+                  Name : constant Universal_String :=
+                    Ctx.Message & "."
+                    & (if Next.Is_Oneof then Next.Name
+                       else Next.Fields.First_Element.Name.Value);
                begin
-                  if not Compiler.Bounds.Field (Bounds, Name).Ignored then
-                     Compiler.SPARK_Fields.Check_Supported
-                       (Field, Name, Errors);
-
-                     declare
-                        List : constant String_Vector :=
-                          Compiler.SPARK_Fields.Component_Names (Field, Ctx);
-                     begin
-                        for C in 1 .. List.Length loop
-                           if Names.Contains (List (C).To_Lowercase) then
-                              Errors.Append
-                                (Name & ": its Ada component " & List (C)
-                                 & " clashes with another field: add "
-                                 & "type:ignore to one of them");
-                           else
-                              Names.Insert (List (C).To_Lowercase);
-                           end if;
-                        end loop;
-                     end;
-                  end if;
+                  for C in 1 .. List.Length loop
+                     if Names.Contains (List (C).To_Lowercase) then
+                        Errors.Append
+                          (Name & ": its Ada component " & List (C)
+                           & " clashes with another field: add "
+                           & "type:ignore to one of them");
+                     else
+                        Names.Insert (List (C).To_Lowercase);
+                     end if;
+                  end loop;
                end;
             end loop;
          end;
       end loop;
 
+      Declared_Names (File, Messages, Enums, Bounds, Types, Overloadable);
+
+      --  Types and constants can't share a name with anything else, while
+      --  subprograms and enumeration literals can be overloaded
+      for J in 1 .. Types.Length loop
+         if Type_Names.Contains (Types (J).To_Lowercase) then
+            Report (Types (J), " would be declared twice");
+         else
+            Type_Names.Insert (Types (J).To_Lowercase);
+         end if;
+      end loop;
+
       for Name of Compiler.SPARK_Messages.Subprogram_Names loop
          if Type_Names.Contains (+Name.all) then
             Errors.Append
-              (Compiler.File_Descriptors.Package_Name (File)
+              (Package_Name
                & ": a message can't be named like a generated subprogram ("
                & (+Name.all) & ")");
+            Reported.Include (+Name.all);
+         end if;
+      end loop;
+
+      for J in 1 .. Overloadable.Length loop
+         if Type_Names.Contains (Overloadable (J).To_Lowercase) then
+            Report
+              (Overloadable (J),
+               " would name a type and a subprogram or literal");
          end if;
       end loop;
    end Check_Supported;
@@ -260,12 +296,52 @@ package body Compiler.SPARK_Files is
                Use_Type => True)));
    end Clauses;
 
+   --------------------
+   -- Declared_Names --
+   --------------------
+
+   procedure Declared_Names
+     (File         : File_Descriptor;
+      Messages     : Message_Vectors.Vector;
+      Enums        : Enum_Vectors.Vector;
+      Bounds       : Compiler.Bounds.Analysis;
+      Types        : out String_Vector;
+      Overloadable : out String_Vector)
+   is
+      Package_Name : constant Universal_String :=
+        Compiler.File_Descriptors.Package_Name (File);
+   begin
+      Types.Clear;
+      Overloadable.Clear;
+
+      for Item of Messages loop
+         Compiler.SPARK_Messages.Declared_Names
+           (Item.Descriptor,
+            Item.Prefix,
+            Compiler.SPARK_Messages.Make_Context
+              (Item.Descriptor, Item.Prefix, Package_Name, Is_Proto_3 (File)),
+            Bounds,
+            Types,
+            Overloadable);
+      end loop;
+
+      for Enum of Enums loop
+         Compiler.SPARK_Enums.Declared_Names
+           (Enum.Descriptor, Enum.Prefix, Types, Overloadable);
+      end loop;
+
+      for Name of Compiler.SPARK_Messages.Subprogram_Names loop
+         Overloadable.Append (+Name.all);
+      end loop;
+   end Declared_Names;
+
    -------------
    -- Collect --
    -------------
 
    procedure Collect
      (File     : File_Descriptor;
+      Bounds   : Compiler.Bounds.Analysis;
       Messages : out Message_Vectors.Vector;
       Enums    : out Enum_Vectors.Vector)
    is
@@ -283,11 +359,12 @@ package body Compiler.SPARK_Files is
       procedure Add (Prefix : Universal_String; Item : Message_Descriptor) is
          Key : constant Universal_String := Prefix & "." & Item.Name.Value;
       begin
-         --  Map entries and groups are only reachable through fields that
-         --  are reported or ignored, so they get no type.
+         --  A map entry gets a type if a map field uses it. Groups are only
+         --  reachable through fields that are reported or ignored.
          if Item.Options.Is_Set
            and then Item.Options.Value.Map_Entry.Is_Set
            and then Item.Options.Value.Map_Entry.Value
+           and then not Compiler.Bounds.Is_Sized (Bounds, Key)
          then
             Skipped.Include (Key);
          else
@@ -387,8 +464,8 @@ package body Compiler.SPARK_Files is
             Messages : Message_Vectors.Vector;
             Enums    : Enum_Vectors.Vector;
          begin
-            Collect (File, Messages, Enums);
-            Check_Supported (File, Messages, Bounds, Errors);
+            Collect (File, Bounds, Messages, Enums);
+            Check_Supported (File, Messages, Enums, Bounds, Errors);
          end;
       end loop;
 
@@ -411,7 +488,18 @@ package body Compiler.SPARK_Files is
             Context  : Node;
             Item     : Google.Protobuf.Compiler.Plugin.File;
          begin
-            Collect (File, Messages, Enums);
+            Collect (File, Bounds, Messages, Enums);
+
+            declare
+               Types        : String_Vector;
+               Overloadable : String_Vector;
+            begin
+               Declared_Names
+                 (File, Messages, Enums, Bounds, Types, Overloadable);
+               Types.Append (Overloadable);
+               Compiler.SPARK_Fields.Set_Package_Names (Types);
+            end;
+
             Context := Clauses (File, Messages, Bounds);
 
             Add_Lines (Spec, Context, Indent => False);

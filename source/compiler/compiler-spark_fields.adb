@@ -55,6 +55,12 @@ package body Compiler.SPARK_Fields is
 
    function N (Text : Universal_String) return Node is (F.New_Name (Text));
 
+   function N (Text : Wide_Wide_String) return Node is (N (+Text));
+
+   function Join (Head, Tail : Node) return Node is
+     (if Tail = null then Head else F.New_List (Head, Tail));
+   --  Like F.New_List, which needs a Tail
+
    type Message_Info is record
       Descriptor : Google.Protobuf.Descriptor.Descriptor_Proto;
       Full_Name  : Universal_String;  --  Like my.pkg.Message
@@ -68,10 +74,28 @@ package body Compiler.SPARK_Fields is
 
    Messages : Message_Maps.Map;
 
+   Package_Names : Compiler.Context.String_Sets.Set;
+   --  Names declared by the package being generated, in lower case
+
+   function Expanded
+     (Full_Name : Universal_String;
+      Ctx       : Context) return Universal_String;
+   --  Return how to write the name of an entity of a package, so that the
+   --  package being generated doesn't hide it
+
    function Call
      (Name      : Universal_String;
-      Arguments : Wide_Wide_String) return Node;
+      Arguments : Universal_String) return Node;
    --  Return a procedure call statement. Arguments are separated by "|".
+
+   function Image (Value : Natural) return Universal_String;
+
+   function Number (Item : Field_Descriptor) return Universal_String is
+     (Image (Natural (Item.Number.Value)));
+
+   ------------------------------
+   -- Names of the Ada entities --
+   ------------------------------
 
    function Component_Name (Item : Field_Descriptor) return Universal_String
      is (Compiler.Context.To_Ada_Name (Item.Name.Value));
@@ -79,26 +103,63 @@ package body Compiler.SPARK_Fields is
    function Has_Name (Item : Field_Descriptor) return Universal_String is
      ("Has_" & Component_Name (Item));
 
-   function Formal_Name (Item : Field_Descriptor) return Universal_String
-     is ("F_" & Component_Name (Item));
+   function Count_Name (Item : Field_Descriptor) return Universal_String is
+     (Component_Name (Item) & "_Count");
+
+   function Formal (Name : Universal_String) return Universal_String is
+     ("F_" & Name);
    --  The prefix keeps fields from clashing with other parameters
 
-   function Number (Item : Field_Descriptor) return Universal_String;
-   --  Return the field number as text
+   function Literal (Item : Field_Descriptor) return Universal_String is
+     (Component_Name (Item) & "_Kind");
+   --  The literal that tells that a field of a oneof is set
 
-   function Image (Value : Natural) return Universal_String;
+   function Not_Set (Self : Item) return Universal_String is
+     (Self.Name & "_Not_Set");
+
+   function Kind_Type (Self : Item; Ctx : Context) return Universal_String is
+     (Ctx.Type_Name & "_" & Self.Name & "_Kind");
+
+   function Variant_Type (Self : Item; Ctx : Context) return Universal_String
+     is (Ctx.Type_Name & "_" & Self.Name & "_Variant");
+
+   --------------------
+   -- Kinds of fields --
+   --------------------
 
    function Is_Required (Item : Field_Descriptor) return Boolean is
      (Item.Label.Is_Set and then Item.Label.Value = LABEL_REQUIRED);
 
+   function Is_Repeated (Item : Field_Descriptor) return Boolean is
+     (Item.Label.Is_Set and then Item.Label.Value = LABEL_REPEATED);
+
+   function Is_Message (Item : Field_Descriptor) return Boolean is
+     (Item.PB_Type.Value = TYPE_MESSAGE);
+
+   function Is_Text (Item : Field_Descriptor) return Boolean is
+     (Item.PB_Type.Value in TYPE_STRING | TYPE_BYTES);
+   --  Return True for a string or bytes field
+
+   function Is_Packable (Item : Field_Descriptor) return Boolean is
+     (Is_Repeated (Item) and not Is_Text (Item) and not Is_Message (Item));
+   --  Return True if values of the field may arrive packed
+
    function Has_Presence
      (Item : Field_Descriptor;
       Ctx  : Context) return Boolean is
-     (Is_Required (Item)
-      or else Item.PB_Type.Value = TYPE_MESSAGE
-      or else (Item.Proto_3_Optional.Is_Set
-               and then Item.Proto_3_Optional.Value)
-      or else not Ctx.Is_Proto_3);
+     (not Ctx.Is_Map_Entry
+      and then not Is_Repeated (Item)
+      and then (Is_Required (Item)
+                or else Is_Message (Item)
+                or else (Item.Proto_3_Optional.Is_Set
+                         and then Item.Proto_3_Optional.Value)
+                or else not Ctx.Is_Proto_3));
+
+   function Is_Always_Written
+     (Item : Field_Descriptor;
+      Ctx  : Context) return Boolean is
+     (Has_Presence (Item, Ctx) or Ctx.Is_Map_Entry);
+   --  Return True if a value equal to the default is written too
 
    function Has_Flag_Parameter
      (Item : Field_Descriptor;
@@ -117,11 +178,30 @@ package body Compiler.SPARK_Fields is
         TYPE_UINT64 | TYPE_FIXED32 | TYPE_FLOAT | TYPE_FIXED64 | TYPE_DOUBLE);
    --  Return True if the component has the same type as the wire value
 
+   function Kind_Name (Item : Field_Descriptor) return Wide_Wide_String is
+     (if Is_Fixed_32 (Item) then "Fixed_32"
+      elsif Is_Fixed_64 (Item) then "Fixed_64"
+      else "Varint");
+   --  Return the wire type of a scalar value
+
    function Wire_Kind (Item : Field_Descriptor) return Universal_String is
-     (if Is_Fixed_32 (Item) then +Wire & "Fixed_32"
-      elsif Is_Fixed_64 (Item) then +Wire & "Fixed_64"
-      elsif Item.PB_Type.Value = TYPE_MESSAGE then +Wire & "Length_Delimited"
-      else +Wire & "Varint");
+     (if Is_Message (Item) or Is_Text (Item) then +Wire & "Length_Delimited"
+      else +Wire & Kind_Name (Item));
+
+   function Raw_Type (Item : Field_Descriptor) return Universal_String is
+     (if Is_Fixed_32 (Item) then +"Interfaces.Unsigned_32"
+      else +"Interfaces.Unsigned_64");
+   --  Return the type of a scalar value on the wire
+
+   function Bounds_Of
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Compiler.Bounds.Field_Bounds
+   is (Compiler.Bounds.Field (Bounds, Ctx.Message & "." & Item.Name.Value));
+
+   -----------
+   -- Types --
+   -----------
 
    function Qualified
      (Type_Name : Universal_String;
@@ -130,20 +210,55 @@ package body Compiler.SPARK_Fields is
    --  Return how to name an entity declared next to a type, from the package
    --  being generated
 
-   function Type_Text
+   function Scalar_Type
      (Item : Field_Descriptor;
       Ctx  : Context) return Universal_String;
+   --  Return the type of a value that is not a string or bytes
+
+   function Element_Type
+     (Item : Field_Descriptor;
+      Ctx  : Context) return Universal_String is
+     (if Is_Text (Item)
+      then Ctx.Type_Name & "_" & Component_Name (Item)
+        & (if Item.PB_Type.Value = TYPE_STRING then "_String" else "_Bytes")
+      else Scalar_Type (Item, Ctx));
+   --  Return the type of one value of the field
+
+   function Array_Type
+     (Item : Field_Descriptor;
+      Ctx  : Context) return Universal_String is
+     (Ctx.Type_Name & "_" & Component_Name (Item) & "_Array");
+
+   function Component_Type
+     (Item : Field_Descriptor;
+      Ctx  : Context) return Universal_String is
+     (if Is_Repeated (Item) then Array_Type (Item, Ctx)
+      else Element_Type (Item, Ctx));
+
+   ------------
+   -- Values --
+   ------------
 
    function Default_Text
      (Item : Field_Descriptor;
       Ctx  : Context) return Universal_String;
-   --  Return the initial value of the component, or "" for a message
+   --  Return the initial value of a value, or "" if its type gives it
+
+   function Element_Default
+     (Item : Field_Descriptor;
+      Ctx  : Context) return Universal_String is
+     (if Is_Text (Item) or Is_Message (Item) then +"<>"
+      else Default_Text (Item, Ctx));
+   --  Return the initial value of the elements of a repeated field
+
+   function Default_Bytes (Item : Field_Descriptor) return String;
+   --  Return the bytes of a proto2 default of a string or bytes field
 
    function To_Wire
      (Item  : Field_Descriptor;
       Ctx   : Context;
       Value : Universal_String) return Universal_String;
-   --  Convert a component to the type used to encode it
+   --  Convert a value to the type used to encode it
 
    function From_Wire
      (Item  : Field_Descriptor;
@@ -158,25 +273,139 @@ package body Compiler.SPARK_Fields is
    function Integer_Text (Text : Universal_String) return Universal_String;
    --  Return an integer default as an Ada expression
 
+   function Is_Initialized
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Target : Universal_String) return Universal_String is
+     (Qualified (Item.Type_Name.Value, +"Is_Initialized", Ctx)
+      & " (" & Target & ")");
+
+   function Needs_Check
+     (Item   : Field_Descriptor;
+      Bounds : Compiler.Bounds.Analysis) return Boolean is
+     (Is_Message (Item) and then Needs_Check (Item.Type_Name.Value, Bounds));
+
+   --------------------------
+   -- Parts of the encoding --
+   --------------------------
+
+   function Put_Value
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis;
+      Value  : Universal_String;
+      Always : Boolean) return Node;
+   --  Return statements that write Value of a field with its tag. Unless
+   --  Always is set, a value equal to the default isn't written.
+
+   function Field_Encode
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node;
+
+   --------------------------
+   -- Parts of the decoding --
+   --------------------------
+
+   function Skip_Unless (Kinds : Universal_String) return Node;
+   --  Return statements that skip the field and return unless it has one of
+   --  the wire types in Kinds
+
+   function Return_Unless_OK return Node is
+     (F.New_If
+        (Condition => N (+"Status /= PB_SPARK.OK"),
+         Then_Path => F.New_Return));
+
+   function Read_Enum
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis;
+      Limit  : Universal_String;
+      Store  : Node) return Node;
+   --  Return a block that reads an enum value into Value and then executes
+   --  Store, if the value is to be kept, as the policy for unknown values says
+
+   function Read_Message
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Limit  : Universal_String;
+      Target : Universal_String;
+      Before : Node;
+      After  : Node) return Node;
+   --  Return a block that merges a message from Buffer into Target. Before
+   --  is executed once the length prefix is read, and After on success.
+
+   function Field_Merge
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node;
+
+   function Repeated_Merge
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node;
+
+   function Member_Merge
+     (Self   : Item;
+      Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node;
+   --  Return statements that read a field of oneof Self
+
+   -------------------------
+   -- Items of one field --
+   -------------------------
+
+   function Field_Types
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node;
+
+   function Field_Component
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node;
+
+   function Field_Clear
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node;
+
+   function Field_Initialized_Term
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Universal_String;
+
    -------------
    -- Actuals --
    -------------
 
    function Actuals
-     (Item : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
+     (Self : Item;
       Ctx  : Context) return Ada_Pretty.Node_Access
    is
-      Value : constant Node := F.New_Argument_Association
-        (F.New_Selected_Name ("V." & Component_Name (Item)));
+      Field  : Field_Descriptor;
+      Result : Node;
    begin
-      if Has_Flag_Parameter (Item, Ctx) then
-         return F.New_List
-           (F.New_Argument_Association
-              (F.New_Selected_Name ("V." & Has_Name (Item))),
-            Value);
-      else
-         return Value;
+      if Self.Is_Oneof then
+         return F.New_Argument_Association (N ("V." & Self.Name));
       end if;
+
+      Field := Self.Fields.First_Element;
+
+      if Has_Flag_Parameter (Field, Ctx) then
+         Result := F.New_Argument_Association (N ("V." & Has_Name (Field)));
+      end if;
+
+      Result := F.New_List
+        (Result, F.New_Argument_Association (N ("V." & Component_Name (Field))));
+
+      if Is_Repeated (Field) then
+         Result := F.New_List
+           (Result, F.New_Argument_Association (N ("V." & Count_Name (Field))));
+      end if;
+
+      return Result;
    end Actuals;
 
    ----------
@@ -185,11 +414,10 @@ package body Compiler.SPARK_Fields is
 
    function Call
      (Name      : Universal_String;
-      Arguments : Wide_Wide_String) return Node
+      Arguments : Universal_String) return Node
    is
       List : Node;
-      Text : constant String_Vector := Universal_String'(+Arguments).Split
-        ('|');
+      Text : constant String_Vector := Arguments.Split ('|');
    begin
       for J in 1 .. Text.Length loop
          List := F.New_List
@@ -204,58 +432,67 @@ package body Compiler.SPARK_Fields is
    ---------------------
 
    procedure Check_Supported
-     (Item      : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
-      Full_Name : League.Strings.Universal_String;
-      Errors    : in out League.String_Vectors.Universal_String_Vector)
-   is
-      procedure Report (Kind : Wide_Wide_String);
-
-      procedure Report (Kind : Wide_Wide_String) is
-      begin
-         Errors.Append
-           (Full_Name & ": " & Kind
-            & " are not supported by the SPARK back end yet");
-      end Report;
-
+     (Self   : Item;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis;
+      Errors : in out League.String_Vectors.Universal_String_Vector) is
    begin
-      if Item.Label.Is_Set and then Item.Label.Value = LABEL_REPEATED then
-         Report ("repeated and map fields");
-      elsif Compiler.Field_Descriptors.Is_One_Of (Item) then
-         Report ("oneof fields");
-      elsif Item.PB_Type.Value in TYPE_STRING | TYPE_BYTES then
-         Report ("string and bytes fields");
-      end if;
+      for Field of Self.Fields loop
+         if Is_Text (Field)
+           and then not Ctx.Is_Proto_3
+           and then Field.Default_Value.Is_Set
+           and then Default_Bytes (Field)'Length
+             > Bounds_Of (Field, Ctx, Bounds).Capacity
+         then
+            Errors.Append
+              (Ctx.Message & "." & Field.Name.Value
+               & ": the default value is longer than the field can hold");
+         end if;
+
+         if Self.Is_Oneof
+           and then Component_Name (Field).To_Lowercase
+             = Self.Name.To_Lowercase
+         then
+            Errors.Append
+              (Ctx.Message & "." & Field.Name.Value
+               & ": its Ada component clashes with its oneof: add "
+               & "type:ignore to it");
+         end if;
+      end loop;
    end Check_Supported;
+
+   -------------
+   -- Choices --
+   -------------
+
+   function Choices
+     (Self : Item) return League.String_Vectors.Universal_String_Vector
+   is
+      Result : String_Vector;
+   begin
+      for Field of Self.Fields loop
+         Result.Append (Number (Field));
+      end loop;
+
+      return Result;
+   end Choices;
 
    -----------
    -- Clear --
    -----------
 
    function Clear
-     (Item : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
-      Ctx  : Context) return Ada_Pretty.Node_Access
-   is
-      Target : constant Node :=
-        F.New_Selected_Name ("V." & Component_Name (Item));
-      Result : Node;
+     (Self   : Item;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access is
    begin
-      if Item.PB_Type.Value = TYPE_MESSAGE then
-         Result := F.New_Statement
-           (F.New_Apply
-              (N (Qualified (Item.Type_Name.Value, +"Clear", Ctx)),
-               F.New_Argument_Association (Target)));
+      if Self.Is_Oneof then
+         return F.New_Assignment
+           (N ("V." & Self.Name),
+            N ("(" & Self.Name & " => " & Not_Set (Self) & ")"));
       else
-         Result := F.New_Assignment (Target, N (Default_Text (Item, Ctx)));
+         return Field_Clear (Self.Fields.First_Element, Ctx, Bounds);
       end if;
-
-      if Has_Presence (Item, Ctx) then
-         Result := F.New_List
-           (F.New_Assignment
-              (F.New_Selected_Name ("V." & Has_Name (Item)), N (+"False")),
-            Result);
-      end if;
-
-      return Result;
    end Clear;
 
    ---------------
@@ -263,25 +500,16 @@ package body Compiler.SPARK_Fields is
    ---------------
 
    function Component
-     (Item : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
-      Ctx  : Context) return Ada_Pretty.Node_Access
-   is
-      Default : constant Universal_String := Default_Text (Item, Ctx);
-      Value   : constant Node := F.New_Variable
-        (Name            => N (Component_Name (Item)),
-         Type_Definition => F.New_Selected_Name (Type_Text (Item, Ctx)),
-         Initialization  =>
-           (if Default.Is_Empty then null else N (Default)));
+     (Self   : Item;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access is
    begin
-      if Has_Presence (Item, Ctx) then
-         return F.New_List
-           (F.New_Variable
-              (Name            => N (Has_Name (Item)),
-               Type_Definition => N (+"Boolean"),
-               Initialization  => N (+"False")),
-            Value);
+      if Self.Is_Oneof then
+         return F.New_Variable
+           (Name            => N (Self.Name),
+            Type_Definition => N (Variant_Type (Self, Ctx)));
       else
-         return Value;
+         return Field_Component (Self.Fields.First_Element, Ctx, Bounds);
       end if;
    end Component;
 
@@ -290,19 +518,150 @@ package body Compiler.SPARK_Fields is
    ---------------------
 
    function Component_Names
-     (Item : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
+     (Self : Item;
       Ctx  : Context) return League.String_Vectors.Universal_String_Vector
    is
       Result : String_Vector;
+      Field  : Field_Descriptor;
    begin
-      Result.Append (Component_Name (Item));
+      if Self.Is_Oneof then
+         Result.Append (Self.Name);
+         return Result;
+      end if;
 
-      if Has_Presence (Item, Ctx) then
-         Result.Append (Has_Name (Item));
+      Field := Self.Fields.First_Element;
+      Result.Append (Component_Name (Field));
+
+      if Has_Presence (Field, Ctx) then
+         Result.Append (Has_Name (Field));
+      end if;
+
+      if Is_Repeated (Field) then
+         Result.Append (Count_Name (Field));
       end if;
 
       return Result;
    end Component_Names;
+
+   --------------------
+   -- Declared_Names --
+   --------------------
+
+   procedure Declared_Names
+     (Self         : Item;
+      Ctx          : Context;
+      Types        : in out League.String_Vectors.Universal_String_Vector;
+      Overloadable : in out League.String_Vectors.Universal_String_Vector) is
+   begin
+      for Field of Self.Fields loop
+         if Is_Text (Field) then
+            Types.Append (Element_Type (Field, Ctx));
+         end if;
+
+         if Is_Repeated (Field) then
+            Types.Append (Array_Type (Field, Ctx));
+         end if;
+
+         if Self.Is_Oneof then
+            Overloadable.Append (Literal (Field));
+         end if;
+      end loop;
+
+      if Self.Is_Oneof then
+         Types.Append (Kind_Type (Self, Ctx));
+         Types.Append (Variant_Type (Self, Ctx));
+         Overloadable.Append (Not_Set (Self));
+      end if;
+   end Declared_Names;
+
+   -------------------
+   -- Default_Bytes --
+   -------------------
+
+   function Default_Bytes (Item : Field_Descriptor) return String is
+      Text   : constant Wide_Wide_String :=
+        Item.Default_Value.Value.To_Wide_Wide_String;
+      Result : String (1 .. Text'Length);
+      Last   : Natural := 0;
+      J      : Positive := Text'First;
+
+      procedure Add (Code : Natural);
+
+      function Digit (C : Wide_Wide_Character) return Natural is
+        (case C is
+            when '0' .. '9' =>
+              Wide_Wide_Character'Pos (C) - Wide_Wide_Character'Pos ('0'),
+            when 'a' .. 'f' =>
+              Wide_Wide_Character'Pos (C) - Wide_Wide_Character'Pos ('a') + 10,
+            when 'A' .. 'F' =>
+              Wide_Wide_Character'Pos (C) - Wide_Wide_Character'Pos ('A') + 10,
+            when others => 16);
+
+      procedure Add (Code : Natural) is
+      begin
+         Last := Last + 1;
+         Result (Last) := Character'Val (Code mod 256);
+      end Add;
+
+   begin
+      if Item.PB_Type.Value = TYPE_STRING then
+         return Item.Default_Value.Value.To_UTF_8_String;
+      end if;
+
+      --  Defaults of bytes fields are escaped as in C
+      while J <= Text'Last loop
+         if Text (J) /= '\' or J = Text'Last then
+            Add (Wide_Wide_Character'Pos (Text (J)));
+            J := J + 1;
+         else
+            J := J + 1;
+
+            case Text (J) is
+               when 'n' => Add (10); J := J + 1;
+               when 'r' => Add (13); J := J + 1;
+               when 't' => Add (9); J := J + 1;
+               when 'a' => Add (7); J := J + 1;
+               when 'b' => Add (8); J := J + 1;
+               when 'f' => Add (12); J := J + 1;
+               when 'v' => Add (11); J := J + 1;
+               when 'x' | 'X' =>
+                  declare
+                     Code : Natural := 0;
+                  begin
+                     J := J + 1;
+
+                     while J <= Text'Last and then Digit (Text (J)) < 16 loop
+                        Code := Code * 16 + Digit (Text (J));
+                        J := J + 1;
+                     end loop;
+
+                     Add (Code);
+                  end;
+               when '0' .. '7' =>
+                  declare
+                     Code  : Natural := 0;
+                     Count : Natural := 0;
+                  begin
+                     while J <= Text'Last
+                       and then Count < 3
+                       and then Text (J) in '0' .. '7'
+                     loop
+                        Code := Code * 8 + Digit (Text (J));
+                        Count := Count + 1;
+                        J := J + 1;
+                     end loop;
+
+                     Add (Code);
+                  end;
+               when others =>
+                  Add (Wide_Wide_Character'Pos (Text (J)));
+                  J := J + 1;
+            end case;
+         end if;
+      end loop;
+
+      return Result (1 .. Last);
+   end Default_Bytes;
 
    ------------------
    -- Default_Text --
@@ -342,7 +701,23 @@ package body Compiler.SPARK_Fields is
             | TYPE_FIXED32 | TYPE_FIXED64 =>
             return (if Given then Integer_Text (Text) else +"0");
          when TYPE_STRING | TYPE_BYTES =>
-            raise Program_Error;  --  Rejected by Check_Supported
+            declare
+               Data   : constant String :=
+                 (if Given then Default_Bytes (Item) else "");
+               Result : Universal_String;
+            begin
+               if Data'Length = 0 then
+                  return +"";
+               end if;
+
+               Result := "(Length => " & Image (Data'Length) & ", Data => (";
+
+               for C of Data loop
+                  Result.Append (Image (Character'Pos (C)) & ", ");
+               end loop;
+
+               return Result & "others => 0))";
+            end;
       end case;
    end Default_Text;
 
@@ -351,61 +726,365 @@ package body Compiler.SPARK_Fields is
    ------------
 
    function Encode
-     (Item   : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
+     (Self   : Item;
       Ctx    : Context;
       Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access
    is
-      Formal : constant Universal_String := Formal_Name (Item);
-      Result : Node;
+      Value : constant Universal_String := Formal (Self.Name);
+      Paths : Node;
    begin
-      if Item.PB_Type.Value = TYPE_MESSAGE then
-         declare
-            Max : constant Universal_String := Image
-              (Compiler.Bounds.Max_Encoded_Size
-                 (Bounds, Item.Type_Name.Value));
-         begin
-            Result := F.New_Block
-              (Declarations => F.New_Variable
-                 (Name            => N (+"Body_Last"),
-                  Type_Definition => F.New_Selected_Name (+"PB_SPARK.Index")),
-               Statements   => F.New_List
-                 ((Call
-                     (+Wire & "Reserve_Delimited",
-                      Number (Item).To_Wide_Wide_String & "|"
-                      & Max.To_Wide_Wide_String
-                      & "|Buffer|Last|Body_Last"),
-                   Call
-                     (Qualified (Item.Type_Name.Value, +"Append", Ctx),
-                      Formal.To_Wide_Wide_String & "|Buffer|Body_Last"),
-                   Call
-                     (+Wire & "Finish_Delimited",
-                      Max.To_Wide_Wide_String & "|Body_Last|Buffer|Last"))));
-         end;
+      if not Self.Is_Oneof then
+         return Field_Encode (Self.Fields.First_Element, Ctx, Bounds);
+      end if;
+
+      Paths := F.New_Case_Path (N (Not_Set (Self)), F.New_Statement);
+
+      for Field of Self.Fields loop
+         Paths := F.New_List
+           (Paths,
+            F.New_Case_Path
+              (N (Literal (Field)),
+               Put_Value
+                 (Field, Ctx, Bounds, Value & "." & Component_Name (Field),
+                  Always => True)));
+      end loop;
+
+      return F.New_Case (N (Value & "." & Self.Name), Paths);
+   end Encode;
+
+   --------------
+   -- Expanded --
+   --------------
+
+   function Expanded
+     (Full_Name : Universal_String;
+      Ctx       : Context) return Universal_String
+   is
+      Result : constant Universal_String :=
+        Compiler.Context.Relative_Name (Full_Name, Ctx.Package_Name);
+   begin
+      if Package_Names.Contains (Result.Split ('.') (1).To_Lowercase) then
+         return "Standard." & Full_Name;
       else
+         return Result;
+      end if;
+   end Expanded;
+
+   ------------------
+   -- Field_Clear --
+   ------------------
+
+   function Field_Clear
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      pragma Unreferenced (Bounds);
+      Target  : constant Universal_String := "V." & Component_Name (Item);
+      Default : constant Universal_String := Default_Text (Item, Ctx);
+      Result  : Node;
+   begin
+      if Is_Repeated (Item) then
+         return F.New_List
+           (F.New_Assignment
+              (N (Target),
+               N ("(others => " & Element_Default (Item, Ctx) & ")")),
+            F.New_Assignment (N ("V." & Count_Name (Item)), N (+"0")));
+      elsif Is_Message (Item) then
+         Result := F.New_Statement
+           (F.New_Apply
+              (N (Qualified (Item.Type_Name.Value, +"Clear", Ctx)),
+               F.New_Argument_Association (N (Target))));
+      elsif Is_Text (Item) then
+         Result := F.New_Assignment
+           (N (Target),
+            N (if Default.Is_Empty then +"(others => <>)" else Default));
+      else
+         Result := F.New_Assignment (N (Target), N (Default));
+      end if;
+
+      if Has_Presence (Item, Ctx) then
+         Result := F.New_List
+           (F.New_Assignment (N ("V." & Has_Name (Item)), N (+"False")),
+            Result);
+      end if;
+
+      return Result;
+   end Field_Clear;
+
+   ---------------------
+   -- Field_Component --
+   ---------------------
+
+   function Field_Component
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      Default : constant Universal_String := Default_Text (Item, Ctx);
+      Value   : Node;
+   begin
+      if Is_Repeated (Item) then
          declare
-            Kind : constant Wide_Wide_String :=
-              (if Is_Fixed_32 (Item) then "Fixed_32"
-               elsif Is_Fixed_64 (Item) then "Fixed_64"
-               else "Varint");
-            Name : constant Wide_Wide_String :=
-              (if Has_Presence (Item, Ctx) then "_Field" else "_Option");
+            Element : constant Universal_String := Element_Default (Item, Ctx);
          begin
-            Result := Call
-              (+Wire & "Put_" & Kind & Name,
-               Number (Item).To_Wide_Wide_String & "|"
-               & To_Wire (Item, Ctx, Formal).To_Wide_Wide_String
-               & "|Buffer|Last");
+            return F.New_List
+              (F.New_Variable
+                 (Name            => N (Component_Name (Item)),
+                  Type_Definition => N (Array_Type (Item, Ctx)),
+                  Initialization  =>
+                    (if Element = +"<>" then null
+                     else N ("(others => " & Element & ")"))),
+               F.New_Variable
+                 (Name            => N (Count_Name (Item)),
+                  Type_Definition => N
+                    ("PB_SPARK.Index range 0 .. "
+                     & Image (Bounds_Of (Item, Ctx, Bounds).Count)),
+                  Initialization  => N (+"0")));
          end;
       end if;
 
+      Value := F.New_Variable
+        (Name            => N (Component_Name (Item)),
+         Type_Definition => N (Element_Type (Item, Ctx)),
+         Initialization  =>
+           (if Default.Is_Empty then null else N (Default)));
+
+      if Has_Presence (Item, Ctx) then
+         return F.New_List
+           (F.New_Variable
+              (Name            => N (Has_Name (Item)),
+               Type_Definition => N (+"Boolean"),
+               Initialization  => N (+"False")),
+            Value);
+      else
+         return Value;
+      end if;
+   end Field_Component;
+
+   ------------------
+   -- Field_Encode --
+   ------------------
+
+   function Field_Encode
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      Value  : constant Universal_String := Formal (Component_Name (Item));
+      Count  : constant Universal_String := Formal (Count_Name (Item));
+      Limits : constant Compiler.Bounds.Field_Bounds :=
+        Bounds_Of (Item, Ctx, Bounds);
+      Result : Node;
+   begin
+      if Is_Repeated (Item) and Limits.Is_Packed then
+         declare
+            Payload : constant Universal_String :=
+              Image (Limits.Count * Limits.Value_Size);
+         begin
+            --  The length prefix is written after the values, because its
+            --  size depends on them
+            return F.New_If
+              (Condition => N (Count & " > 0"),
+               Then_Path => F.New_Block
+                 (Declarations => F.New_Variable
+                    (Name            => N (+"Body_Last"),
+                     Type_Definition => N (+"PB_SPARK.Index")),
+                  Statements   => F.New_List
+                    ((Call
+                        (+Wire & "Reserve_Delimited",
+                         Number (Item) & "|" & Payload
+                         & "|Buffer|Last|Body_Last"),
+                      F.New_For
+                        (Name       => N (+"J"),
+                         Iterator   => N ("1 .. " & Count),
+                         Statements => F.New_List
+                           (F.New_Pragma
+                              (N (+"Loop_Invariant"),
+                               N ("Body_Last in Body_Last'Loop_Entry .. "
+                                  & "Body_Last'Loop_Entry + (J - 1) * "
+                                  & Image (Limits.Value_Size))),
+                            Call
+                              (+Wire & "Put_" & Kind_Name (Item),
+                               To_Wire (Item, Ctx, Value & " (J)")
+                               & "|Buffer|Body_Last"))),
+                      Call
+                        (+Wire & "Finish_Delimited",
+                         Payload & "|Body_Last|Buffer|Last")))));
+         end;
+      elsif Is_Repeated (Item) then
+         return F.New_For
+           (Name       => N (+"J"),
+            Iterator   => N ("1 .. " & Count),
+            Statements => F.New_List
+              (F.New_Pragma
+                 (N (+"Loop_Invariant"),
+                  N ("Last in Last'Loop_Entry .. Last'Loop_Entry + (J - 1) * "
+                     & Image (Limits.Max_Size / Limits.Count))),
+               Put_Value (Item, Ctx, Bounds, Value & " (J)", Always => True)));
+      end if;
+
+      Result := Put_Value
+        (Item, Ctx, Bounds, Value, Is_Always_Written (Item, Ctx));
+
       if Has_Flag_Parameter (Item, Ctx) then
          Result := F.New_If
-           (Condition => N ("F_" & Has_Name (Item)),
+           (Condition => N (Formal (Has_Name (Item))),
             Then_Path => Result);
       end if;
 
       return Result;
-   end Encode;
+   end Field_Encode;
+
+   ----------------------------
+   -- Field_Initialized_Term --
+   ----------------------------
+
+   function Field_Initialized_Term
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Universal_String
+   is
+      Target : constant Universal_String := "V." & Component_Name (Item);
+      Nested : constant Boolean := Needs_Check (Item, Bounds);
+   begin
+      if Is_Repeated (Item) then
+         if Nested then
+            return "(for all J in 1 .. V." & Count_Name (Item) & " => "
+              & Is_Initialized (Item, Ctx, Target & " (J)") & ")";
+         else
+            return +"";
+         end if;
+      elsif Is_Required (Item) then
+         return "V." & Has_Name (Item)
+           & (if Nested then " and then " & Is_Initialized (Item, Ctx, Target)
+              else +"");
+      elsif Nested and Has_Presence (Item, Ctx) then
+         return "(not V." & Has_Name (Item) & " or else "
+           & Is_Initialized (Item, Ctx, Target) & ")";
+      elsif Nested then
+         return Is_Initialized (Item, Ctx, Target);
+      else
+         return +"";
+      end if;
+   end Field_Initialized_Term;
+
+   -----------------
+   -- Field_Merge --
+   -----------------
+
+   function Field_Merge
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      Target  : constant Universal_String := "V." & Component_Name (Item);
+      Set_Has : constant Node :=
+        (if Has_Presence (Item, Ctx)
+         then F.New_Assignment (N ("V." & Has_Name (Item)), N (+"True"))
+         else null);
+      Arrived : constant Universal_String :=
+        "Status = PB_SPARK.OK and then Wire in " & Wire_Kind (Item);
+      Result  : Node;
+   begin
+      if Is_Repeated (Item) then
+         return Repeated_Merge (Item, Ctx, Bounds);
+      end if;
+
+      --  Ada_Pretty doesn't print "else", so other wire types are skipped
+      --  first, and Known and not Known are tested apart.
+      if Is_Message (Item) then
+         return F.New_List
+           (Skip_Unless (Wire_Kind (Item)),
+            Read_Message
+              (Item, Ctx, +"Limit", Target,
+               Before => null,
+               After  => Join
+                 (F.New_Assignment (N (+"Pos"), N (+"Inner + 1")), Set_Has)));
+      elsif Is_Text (Item) then
+         Result := Call
+           (+Wire
+            & (if Item.PB_Type.Value = TYPE_STRING then "Read_String_Field"
+               else "Read_Bytes_Field"),
+            "Buffer|Limit|Field|Wire|Pos|" & Target & ".Data|" & Target
+            & ".Length|Status");
+      elsif Item.PB_Type.Value = TYPE_ENUM then
+         return F.New_List
+           (Skip_Unless (Wire_Kind (Item)),
+            Read_Enum
+              (Item, Ctx, Bounds, +"Limit",
+               Join (F.New_Assignment (N (Target), N (+"Value")), Set_Has)));
+      elsif Is_Direct (Item) then
+         Result := Call
+           (+Wire & "Read_" & Kind_Name (Item) & "_Field",
+            "Buffer|Limit|Field|Wire|Pos|" & Target & "|Status");
+      else
+         --  Raw starts as the current value, so if the field is skipped
+         --  because it has another wire type then the component is left as
+         --  it was.
+         Result := F.New_Block
+           (Declarations => F.New_Variable
+              (Name            => N (+"Raw"),
+               Type_Definition => N (Raw_Type (Item)),
+               Initialization  => N (To_Wire (Item, Ctx, Target))),
+            Statements   => F.New_List
+              (Call
+                 (+Wire & "Read_" & Kind_Name (Item) & "_Field",
+                  +"Buffer|Limit|Field|Wire|Pos|Raw|Status"),
+               F.New_Assignment (N (Target), N (From_Wire (Item, +"Raw")))));
+      end if;
+
+      if Set_Has /= null then
+         Result := F.New_List
+           (Result, F.New_If (Condition => N (Arrived), Then_Path => Set_Has));
+      end if;
+
+      return Result;
+   end Field_Merge;
+
+   -----------------
+   -- Field_Types --
+   -----------------
+
+   function Field_Types
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      Limits : constant Compiler.Bounds.Field_Bounds :=
+        Bounds_Of (Item, Ctx, Bounds);
+      Result : Node;
+   begin
+      if Is_Text (Item) then
+         Result := F.New_Type
+           (Name       => N (Element_Type (Item, Ctx)),
+            Definition => F.New_Record
+              (Components => F.New_List
+                 (F.New_Variable
+                    (Name            => N (+"Length"),
+                     Type_Definition => N
+                       ("PB_SPARK.Index range 0 .. " & Image (Limits.Capacity)),
+                     Initialization  => N (+"0")),
+                  F.New_Variable
+                    (Name            => N (+"Data"),
+                     Type_Definition => N
+                       ("PB_SPARK.Byte_Array (1 .. " & Image (Limits.Capacity)
+                        & ")"),
+                     Initialization  => N (+"(others => 0)")))));
+      end if;
+
+      if Is_Repeated (Item) then
+         Result := F.New_List
+           (Result,
+            F.New_Type
+              (Name       => N (Array_Type (Item, Ctx)),
+               Definition => N
+                 ("array (PB_SPARK.Index range 1 .. " & Image (Limits.Count)
+                  & ") of " & Element_Type (Item, Ctx))));
+      end if;
+
+      return Result;
+   end Field_Types;
 
    ----------------
    -- Float_Bits --
@@ -487,28 +1166,30 @@ package body Compiler.SPARK_Fields is
    ----------------------
 
    function Initialized_Term
-     (Item   : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
+     (Self   : Item;
       Ctx    : Context;
       Bounds : Compiler.Bounds.Analysis)
       return League.Strings.Universal_String
    is
-      Nested : constant Boolean :=
-        Item.PB_Type.Value = TYPE_MESSAGE
-        and then Needs_Check (Item.Type_Name.Value, Bounds);
-      Check  : constant Universal_String :=
-        (if Nested
-         then Qualified (Item.Type_Name.Value, +"Is_Initialized", Ctx)
-           & " (V." & Component_Name (Item) & ")"
-         else +"");
+      Result : String_Vector;
    begin
-      if Is_Required (Item) then
-         return "V." & Has_Name (Item)
-           & (if Nested then " and then " & Check else +"");
-      elsif Nested then
-         return "(not V." & Has_Name (Item) & " or else " & Check & ")";
-      else
-         return +"";
+      if not Self.Is_Oneof then
+         return Field_Initialized_Term (Self.Fields.First_Element, Ctx, Bounds);
       end if;
+
+      for Field of Self.Fields loop
+         if Needs_Check (Field, Bounds) then
+            Result.Append
+              ("(V." & Self.Name & "." & Self.Name & " /= " & Literal (Field)
+               & " or else "
+               & Is_Initialized
+                 (Field, Ctx,
+                  "V." & Self.Name & "." & Component_Name (Field))
+               & ")");
+         end if;
+      end loop;
+
+      return Result.Join (" and then ");
    end Initialized_Term;
 
    ------------------
@@ -525,165 +1206,175 @@ package body Compiler.SPARK_Fields is
    end Integer_Text;
 
    -----------
+   -- Items --
+   -----------
+
+   function Items
+     (Message : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Ctx     : Context;
+      Bounds  : Compiler.Bounds.Analysis) return Item_Vectors.Vector
+   is
+      Result : Item_Vectors.Vector;
+      Done   : array (0 .. Message.Oneof_Decl.Length) of Boolean :=
+        (others => False);
+   begin
+      for J in 1 .. Message.Field.Length loop
+         declare
+            Field : constant Field_Descriptor := Message.Field (J);
+         begin
+            if Bounds_Of (Field, Ctx, Bounds).Ignored then
+               null;
+            elsif not Compiler.Field_Descriptors.Is_One_Of (Field) then
+               Result.Append
+                 ((Is_Oneof => False,
+                   Name     => <>,
+                   Fields   => Field_Vectors.To_Vector (Field, 1)));
+            elsif not Done (Natural (Field.Oneof_Index.Value)) then
+               declare
+                  Index : constant Natural := Natural (Field.Oneof_Index.Value);
+                  Next  : Item;
+               begin
+                  Done (Index) := True;
+                  Next.Is_Oneof := True;
+                  Next.Name := Compiler.Context.To_Ada_Name
+                    (Message.Oneof_Decl (Index + 1).Name.Value);
+
+                  for K in J .. Message.Field.Length loop
+                     declare
+                        Member : constant Field_Descriptor :=
+                          Message.Field (K);
+                     begin
+                        if Compiler.Field_Descriptors.Is_One_Of (Member)
+                          and then Natural (Member.Oneof_Index.Value) = Index
+                          and then not Bounds_Of (Member, Ctx, Bounds).Ignored
+                        then
+                           Next.Fields.Append (Member);
+                        end if;
+                     end;
+                  end loop;
+
+                  Result.Append (Next);
+               end;
+            end if;
+         end;
+      end loop;
+
+      return Result;
+   end Items;
+
+   --------------
+   -- Max_Size --
+   --------------
+
+   function Max_Size
+     (Self   : Item;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Natural
+   is
+      Result : Natural := 0;
+   begin
+      --  Only one field of a oneof is written
+      for Field of Self.Fields loop
+         Result := Natural'Max
+           (Result, Bounds_Of (Field, Ctx, Bounds).Max_Size);
+      end loop;
+
+      return Result;
+   end Max_Size;
+
+   ------------------
+   -- Member_Merge --
+   ------------------
+
+   function Member_Merge
+     (Self   : Item;
+      Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      Variant : constant Universal_String := "V." & Self.Name;
+      Target  : constant Universal_String :=
+        Variant & "." & Component_Name (Item);
+      Switch  : constant Node := F.New_If
+        (Condition => N
+           (Variant & "." & Self.Name & " /= " & Literal (Item)),
+         Then_Path => F.New_Assignment
+           (N (Variant),
+            N ("(" & Self.Name & " => " & Literal (Item) & ", "
+               & Component_Name (Item) & " => <>)")));
+      --  Select the field, so that its component can be written
+
+      function Store (Value : Universal_String) return Node is
+        (F.New_Assignment
+           (N (Variant),
+            N ("(" & Self.Name & " => " & Literal (Item) & ", "
+               & Component_Name (Item) & " => " & Value & ")")));
+
+      Result : Node := Skip_Unless (Wire_Kind (Item));
+   begin
+      if Is_Message (Item) then
+         return F.New_List
+           (Result,
+            Read_Message
+              (Item, Ctx, +"Limit", Target,
+               Before => Switch,
+               After  => F.New_Assignment (N (+"Pos"), N (+"Inner + 1"))));
+      elsif Is_Text (Item) then
+         return F.New_List
+           ((Result,
+             Switch,
+             Call
+               (+Wire
+                & (if Item.PB_Type.Value = TYPE_STRING then "Read_String_Field"
+                   else "Read_Bytes_Field"),
+                "Buffer|Limit|Field|Wire|Pos|" & Target & ".Data|" & Target
+                & ".Length|Status")));
+      elsif Item.PB_Type.Value = TYPE_ENUM then
+         return F.New_List
+           (Result,
+            Read_Enum (Item, Ctx, Bounds, +"Limit", Store (+"Value")));
+      end if;
+
+      Result := F.New_List
+        (Result,
+         F.New_Block
+           (Declarations => F.New_Variable
+              (Name            => N (+"Raw"),
+               Type_Definition => N (Raw_Type (Item))),
+            Statements   => F.New_List
+              (Call
+                 (+Wire & "Get_" & Kind_Name (Item),
+                  +"Buffer|Limit|Pos|Raw|Status"),
+               F.New_If
+                 (Condition => N (+"Status = PB_SPARK.OK"),
+                  Then_Path => Store (From_Wire (Item, +"Raw"))))));
+
+      return Result;
+   end Member_Merge;
+
+   -----------
    -- Merge --
    -----------
 
    function Merge
-     (Item   : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
+     (Self   : Item;
       Ctx    : Context;
       Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access
    is
-      Target : constant Universal_String := "V." & Component_Name (Item);
-      Has    : constant Universal_String := "V." & Has_Name (Item);
-      Set_Has : constant Node :=
-        F.New_Assignment (F.New_Selected_Name (Has), N (+"True"));
-      Arrived : constant Universal_String :=
-        "Status = PB_SPARK.OK and then Wire in " & Wire_Kind (Item);
-      Name   : constant Wide_Wide_String :=
-        (if Is_Fixed_32 (Item) then "Read_Fixed_32_Field"
-         elsif Is_Fixed_64 (Item) then "Read_Fixed_64_Field"
-         else "Read_Varint_Field");
-      Read   : constant Node := Call
-        (+Wire & Name,
-         "Buffer|Limit|Field|Wire|Pos|"
-         & (if Is_Direct (Item) then Target.To_Wide_Wide_String else "Raw")
-         & "|Status");
+      Result : Node;
    begin
-      --  Ada_Pretty doesn't print "else", so other wire types are skipped
-      --  first, and Known and not Known are tested apart.
-      if Item.PB_Type.Value = TYPE_MESSAGE then
-         return F.New_List
-          (F.New_If
-             (Condition => N ("Wire not in " & Wire_Kind (Item)),
-              Then_Path => F.New_List
-                (Call
-                   (+Wire & "Skip_Field",
-                    "Buffer|Limit|Field|Wire|Pos|Status"),
-                 F.New_Return)),
-           F.New_Block
-              (Declarations => F.New_Variable
-                 (Name            => N (+"Inner"),
-                  Type_Definition => F.New_Selected_Name (+"PB_SPARK.Index")),
-               Statements   => F.New_List
-                 (Call
-                    (+Wire & "Get_Delimited",
-                     "Buffer|Limit|Pos|Inner|Status"),
-                  F.New_If
-                    (Condition => N (+"Status = PB_SPARK.OK"),
-                     Then_Path => F.New_List
-                       (Call
-                          (Qualified (Item.Type_Name.Value, +"Merge", Ctx),
-                           "Buffer|Inner|Pos|" & Target.To_Wide_Wide_String
-                           & "|Status"),
-                        F.New_If
-                          (Condition => N (+"Status = PB_SPARK.OK"),
-                           Then_Path => F.New_List
-                             (F.New_Assignment
-                                (N (+"Pos"), N (+"Inner + 1")),
-                              Set_Has)))))));
-      elsif Item.PB_Type.Value = TYPE_ENUM then
-         declare
-            Key     : constant Universal_String := Item.Type_Name.Value;
-            Policy  : constant Compiler.Options.Unknown_Enum_Policy :=
-              Compiler.Bounds.Field
-                (Bounds, Ctx.Message & "." & Item.Name.Value).On_Unknown_Enum;
-            Convert : constant Node := Call
-              (Qualified
-                 (Key,
-                  Compiler.Context.Named_Types (Key).Ada_Type.Type_Name
-                  & "_From_Wire",
-                  Ctx),
-               Wire & "To_Integer_32 (Raw)|" & Target.To_Wide_Wide_String
-               & "|Known");
-            Unknown : Node;
-            Known   : Node;
-         begin
-            --  Enums of proto3 accept any value, but an Ada enumeration
-            --  can't hold one it doesn't define, so the policy decides.
-            --  Unknown values of proto2 enums are unknown fields.
-            if not Ctx.Is_Proto_3 then
-               null;
-            elsif Policy = Compiler.Options.Reject then
-               Unknown := F.New_Assignment
-                 (N (+"Status"), F.New_Selected_Name (+"PB_SPARK.Unknown_Enum"));
-            else
-               Unknown := F.New_Assignment
-                 (F.New_Selected_Name (Target), N (Default_Text (Item, Ctx)));
+      for Field of Self.Fields loop
+         Result := F.New_List
+           (Result,
+            F.New_Case_Path
+              (Choice => N (Number (Field)),
+               List   =>
+                 (if Self.Is_Oneof
+                  then Member_Merge (Self, Field, Ctx, Bounds)
+                  else Field_Merge (Field, Ctx, Bounds))));
+      end loop;
 
-               if Has_Presence (Item, Ctx) then
-                  Unknown := F.New_List (Unknown, Set_Has);
-               end if;
-            end if;
-
-            if Has_Presence (Item, Ctx) then
-               Known := Set_Has;
-            end if;
-
-            return F.New_Block
-              (Declarations => F.New_List
-                 (F.New_Variable
-                    (Name            => N (+"Raw"),
-                     Type_Definition => F.New_Selected_Name
-                       (+"Interfaces.Unsigned_64"),
-                     Initialization  => N (To_Wire (Item, Ctx, Target))),
-                  F.New_Variable
-                    (Name            => N (+"Known"),
-                     Type_Definition => N (+"Boolean"))),
-               Statements   => F.New_List
-                 (Read,
-                  F.New_If
-                    (Condition => N (Arrived),
-                     Then_Path => F.New_List
-                       (Convert,
-                        (if Known = null
-                         then F.New_If
-                           (Condition => N (+"not Known"),
-                            Then_Path => Unknown)
-                         elsif Unknown = null
-                         then F.New_If
-                           (Condition => N (+"Known"),
-                            Then_Path => Known)
-                         else F.New_List
-                           (F.New_If
-                              (Condition => N (+"Known"),
-                               Then_Path => Known),
-                            F.New_If
-                              (Condition => N (+"not Known"),
-                               Then_Path => Unknown)))))));
-         end;
-      end if;
-
-      declare
-         Result : Node;
-      begin
-         if Is_Direct (Item) then
-            Result := Read;
-         else
-            --  Raw starts as the current value, so if the field is skipped
-            --  because it has another wire type then the component is left
-            --  as it was.
-            Result := F.New_Block
-              (Declarations => F.New_Variable
-                 (Name            => N (+"Raw"),
-                  Type_Definition => F.New_Selected_Name
-                    (if Is_Fixed_32 (Item) then +"Interfaces.Unsigned_32"
-                     else +"Interfaces.Unsigned_64"),
-                  Initialization  => N (To_Wire (Item, Ctx, Target))),
-               Statements   => F.New_List
-                 (Read,
-                  F.New_Assignment
-                    (F.New_Selected_Name (Target),
-                     N (From_Wire (Item, +"Raw")))));
-         end if;
-
-         if Has_Presence (Item, Ctx) then
-            Result := F.New_List
-              (Result,
-               F.New_If (Condition => N (Arrived), Then_Path => Set_Has));
-         end if;
-
-         return Result;
-      end;
+      return Result;
    end Merge;
 
    -----------------
@@ -704,13 +1395,7 @@ package body Compiler.SPARK_Fields is
               (Bounds, Info.Full_Name & "." & Item.Name.Value).Ignored
             then
                null;
-            elsif Is_Required (Item) then
-               return True;
-            elsif Item.PB_Type.Value = TYPE_MESSAGE
-              and then not (Item.Label.Is_Set
-                            and then Item.Label.Value = LABEL_REPEATED)
-              and then Needs_Check (Item.Type_Name.Value, Bounds)
-            then
+            elsif Is_Required (Item) or else Needs_Check (Item, Bounds) then
                return True;
             end if;
          end;
@@ -719,35 +1404,114 @@ package body Compiler.SPARK_Fields is
       return False;
    end Needs_Check;
 
-   ------------
-   -- Number --
-   ------------
-
-   function Number (Item : Field_Descriptor) return Universal_String is
-     (Image (Natural (Item.Number.Value)));
-
    ----------------
    -- Parameters --
    ----------------
 
    function Parameters
-     (Item : Google.Protobuf.Descriptor.Field_Descriptor_Proto;
+     (Self : Item;
       Ctx  : Context) return Ada_Pretty.Node_Access
    is
-      Value : constant Node := F.New_Parameter
-        (Name            => N (Formal_Name (Item)),
-         Type_Definition => F.New_Selected_Name (Type_Text (Item, Ctx)));
+      Field  : Field_Descriptor;
+      Result : Node;
    begin
-      if Has_Flag_Parameter (Item, Ctx) then
-         return F.New_List
-           (F.New_Parameter
-              (Name            => N ("F_" & Has_Name (Item)),
-               Type_Definition => N (+"Boolean")),
-            Value);
-      else
-         return Value;
+      if Self.Is_Oneof then
+         return F.New_Parameter
+           (Name            => N (Formal (Self.Name)),
+            Type_Definition => N (Variant_Type (Self, Ctx)));
       end if;
+
+      Field := Self.Fields.First_Element;
+
+      if Has_Flag_Parameter (Field, Ctx) then
+         Result := F.New_Parameter
+           (Name            => N (Formal (Has_Name (Field))),
+            Type_Definition => N (+"Boolean"));
+      end if;
+
+      Result := F.New_List
+        (Result,
+         F.New_Parameter
+           (Name            => N (Formal (Component_Name (Field))),
+            Type_Definition => N (Component_Type (Field, Ctx))));
+
+      if Is_Repeated (Field) then
+         Result := F.New_List
+           (Result,
+            F.New_Parameter
+              (Name            => N (Formal (Count_Name (Field))),
+               Type_Definition => N (+"PB_SPARK.Index")));
+      end if;
+
+      return Result;
    end Parameters;
+
+   ------------------
+   -- Precondition --
+   ------------------
+
+   function Precondition
+     (Self   : Item;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis)
+      return League.Strings.Universal_String
+   is
+      Field : constant Field_Descriptor := Self.Fields.First_Element;
+   begin
+      if not Self.Is_Oneof and then Is_Repeated (Field) then
+         return Formal (Count_Name (Field)) & " <= "
+           & Image (Bounds_Of (Field, Ctx, Bounds).Count);
+      else
+         return +"";
+      end if;
+   end Precondition;
+
+   ---------------
+   -- Put_Value --
+   ---------------
+
+   function Put_Value
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis;
+      Value  : Universal_String;
+      Always : Boolean) return Node
+   is
+      Form : constant Wide_Wide_String :=
+        (if Always then "_Field" else "_Option");
+   begin
+      if Is_Message (Item) then
+         declare
+            Max : constant Universal_String := Image
+              (Compiler.Bounds.Max_Encoded_Size
+                 (Bounds, Item.Type_Name.Value));
+         begin
+            return F.New_Block
+              (Declarations => F.New_Variable
+                 (Name            => N (+"Body_Last"),
+                  Type_Definition => N (+"PB_SPARK.Index")),
+               Statements   => F.New_List
+                 ((Call
+                     (+Wire & "Reserve_Delimited",
+                      Number (Item) & "|" & Max & "|Buffer|Last|Body_Last"),
+                   Call
+                     (Qualified (Item.Type_Name.Value, +"Append", Ctx),
+                      Value & "|Buffer|Body_Last"),
+                   Call
+                     (+Wire & "Finish_Delimited",
+                      Max & "|Body_Last|Buffer|Last"))));
+         end;
+      elsif Is_Text (Item) then
+         return Call
+           (+Wire & "Put_Bytes" & Form,
+            Number (Item) & "|" & Value & ".Data|" & Value
+            & ".Length|Buffer|Last");
+      else
+         return Call
+           (+Wire & "Put_" & Kind_Name (Item) & Form,
+            Number (Item) & "|" & To_Wire (Item, Ctx, Value) & "|Buffer|Last");
+      end if;
+   end Put_Value;
 
    ---------------
    -- Qualified --
@@ -764,10 +1528,111 @@ package body Compiler.SPARK_Fields is
       if Owner = Ctx.Package_Name then
          return Name;
       else
-         return Compiler.Context.Relative_Name
-           (Owner & "." & Name, Ctx.Package_Name);
+         return Expanded (Owner & "." & Name, Ctx);
       end if;
    end Qualified;
+
+   ---------------
+   -- Read_Enum --
+   ---------------
+
+   function Read_Enum
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis;
+      Limit  : Universal_String;
+      Store  : Node) return Node
+   is
+      Key     : constant Universal_String := Item.Type_Name.Value;
+      Policy  : constant Compiler.Options.Unknown_Enum_Policy :=
+        Bounds_Of (Item, Ctx, Bounds).On_Unknown_Enum;
+      Convert : Node := Call
+        (Qualified
+           (Key,
+            Compiler.Context.Named_Types (Key).Ada_Type.Type_Name
+            & "_From_Wire",
+            Ctx),
+         +Wire & "To_Integer_32 (Raw)|Value|Known");
+      Keep    : Node;
+   begin
+      --  Enums of proto3 accept any value, but an Ada enumeration can't hold
+      --  one it doesn't define, so the policy decides. With "first" Value
+      --  stays the default. Unknown values of proto2 enums are unknown
+      --  fields, so they are dropped.
+      if not Ctx.Is_Proto_3 then
+         Keep := F.New_If (Condition => N (+"Known"), Then_Path => Store);
+      elsif Policy = Compiler.Options.Reject then
+         Keep := F.New_List
+           (F.New_If
+              (Condition => N (+"not Known"),
+               Then_Path => F.New_Assignment
+                 (N (+"Status"), N (+"PB_SPARK.Unknown_Enum"))),
+            F.New_If (Condition => N (+"Known"), Then_Path => Store));
+      else
+         Keep := Store;
+         Convert := F.New_List
+           ((F.New_Pragma
+               (N (+"Warnings"),
+                N (+"GNATprove, Off, ""*""""Known"""" is set by*"", Reason "
+                   & "=> ""Unknown values keep the default""")),
+             Convert,
+             F.New_Pragma
+               (N (+"Warnings"),
+                N (+"GNATprove, On, ""*""""Known"""" is set by*"""))));
+      end if;
+
+      return F.New_Block
+        (Declarations => F.New_List
+           ((F.New_Variable
+               (Name            => N (+"Raw"),
+                Type_Definition => N (+"Interfaces.Unsigned_64")),
+             F.New_Variable
+               (Name            => N (+"Value"),
+                Type_Definition => N (Scalar_Type (Item, Ctx)),
+                Initialization  => N (Default_Text (Item, Ctx))),
+             F.New_Variable
+               (Name            => N (+"Known"),
+                Type_Definition => N (+"Boolean")))),
+         Statements   => F.New_List
+           ((Call
+               (+Wire & "Get_Varint", "Buffer|" & Limit & "|Pos|Raw|Status"),
+             F.New_If
+               (Condition => N (+"Status = PB_SPARK.OK"),
+                Then_Path => F.New_List (Convert, Keep)))));
+   end Read_Enum;
+
+   ------------------
+   -- Read_Message --
+   ------------------
+
+   function Read_Message
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Limit  : Universal_String;
+      Target : Universal_String;
+      Before : Node;
+      After  : Node) return Node is
+   begin
+      return F.New_Block
+        (Declarations => F.New_Variable
+           (Name            => N (+"Inner"),
+            Type_Definition => N (+"PB_SPARK.Index")),
+         Statements   => F.New_List
+           (Call
+              (+Wire & "Get_Delimited",
+               "Buffer|" & Limit & "|Pos|Inner|Status"),
+            F.New_If
+              (Condition => N (+"Status = PB_SPARK.OK"),
+               Then_Path => F.New_List
+                 (Before,
+                  F.New_List
+                    (Call
+                       (Qualified (Item.Type_Name.Value, +"Merge", Ctx),
+                        "Buffer|Inner|Pos|" & Target & "|Status"),
+                     F.New_If
+                       (Condition => N (+"Status = PB_SPARK.OK"),
+                        Then_Path => After))))));
+   end Read_Message;
 
    --------------
    -- Register --
@@ -814,6 +1679,183 @@ package body Compiler.SPARK_Fields is
       end loop;
    end Register;
 
+   -----------------------
+   -- Set_Package_Names --
+   -----------------------
+
+   procedure Set_Package_Names
+     (Names : League.String_Vectors.Universal_String_Vector) is
+   begin
+      Package_Names.Clear;
+
+      for J in 1 .. Names.Length loop
+         Package_Names.Include (Names (J).To_Lowercase);
+      end loop;
+   end Set_Package_Names;
+
+   --------------------
+   -- Repeated_Merge --
+   --------------------
+
+   function Repeated_Merge
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      Values : constant Universal_String := "V." & Component_Name (Item);
+      Count  : constant Universal_String := "V." & Count_Name (Item);
+      Next   : constant Universal_String :=
+        Values & " (" & Count & " + 1)";
+      Full   : constant Node := F.New_If
+        (Condition => N
+           (Count & " = " & Image (Bounds_Of (Item, Ctx, Bounds).Count)),
+         Then_Path => F.New_List
+           (F.New_Assignment (N (+"Status"), N (+"PB_SPARK.Limit_Exceeded")),
+            F.New_Return));
+      Grow   : constant Node :=
+        F.New_Assignment (N (Count), N (Count & " + 1"));
+
+      function Append_One (Limit : Universal_String) return Node;
+      --  Return statements that read one value into Next and count it
+
+      function Append_One (Limit : Universal_String) return Node is
+      begin
+         if Is_Message (Item) then
+            return Read_Message
+              (Item, Ctx, Limit, Next,
+               Before => F.New_Statement
+                 (F.New_Apply
+                    (N (Qualified (Item.Type_Name.Value, +"Clear", Ctx)),
+                     F.New_Argument_Association (N (Next)))),
+               After  => F.New_List
+                 (F.New_Assignment (N (+"Pos"), N (+"Inner + 1")), Grow));
+         elsif Is_Text (Item) then
+            return F.New_List
+              (Call
+                 (+Wire
+                  & (if Item.PB_Type.Value = TYPE_STRING
+                     then "Read_String_Field" else "Read_Bytes_Field"),
+                  "Buffer|" & Limit & "|Field|Wire|Pos|" & Next & ".Data|"
+                  & Next & ".Length|Status"),
+               F.New_If
+                 (Condition => N (+"Status = PB_SPARK.OK"),
+                  Then_Path => Grow));
+         elsif Item.PB_Type.Value = TYPE_ENUM then
+            return Read_Enum
+              (Item, Ctx, Bounds, Limit,
+               F.New_List
+                 (Grow,
+                  F.New_Assignment (N (Values & " (" & Count & ")"),
+                                    N (+"Value"))));
+         else
+            return F.New_Block
+              (Declarations => F.New_Variable
+                 (Name            => N (+"Raw"),
+                  Type_Definition => N (Raw_Type (Item))),
+               Statements   => F.New_List
+                 (Call
+                    (+Wire & "Get_" & Kind_Name (Item),
+                     "Buffer|" & Limit & "|Pos|Raw|Status"),
+                  F.New_If
+                    (Condition => N (+"Status = PB_SPARK.OK"),
+                     Then_Path => F.New_List
+                       (Grow,
+                        F.New_Assignment
+                          (N (Values & " (" & Count & ")"),
+                           N (From_Wire (Item, +"Raw")))))));
+         end if;
+      end Append_One;
+
+      Result : Node;
+   begin
+      if not Is_Packable (Item) then
+         return F.New_List
+           ((Skip_Unless (Wire_Kind (Item)), Full, Append_One (+"Limit")));
+      end if;
+
+      --  Values that can be packed are accepted either way
+      Result := F.New_List
+        ((Skip_Unless (Wire_Kind (Item) & " | " & Wire & "Length_Delimited"),
+          F.New_If
+            (Condition => N ("Wire in " & Wire & "Length_Delimited"),
+             Then_Path => F.New_List
+               (F.New_Block
+                  (Declarations => F.New_Variable
+                     (Name            => N (+"Inner"),
+                      Type_Definition => N (+"PB_SPARK.Index")),
+                   Statements   => F.New_List
+                     (Call
+                        (+Wire & "Get_Delimited",
+                         +"Buffer|Limit|Pos|Inner|Status"),
+                      F.New_Loop
+                        (Condition  => N
+                           (+"Status = PB_SPARK.OK and then Pos <= Inner"),
+                         Statements => F.New_List
+                           ((F.New_Pragma
+                               (N (+"Loop_Invariant"),
+                                N (+"Pos in Pos'Loop_Entry .. Inner")),
+                             F.New_Pragma
+                               (N (+"Loop_Variant"),
+                                F.New_Argument_Association
+                                  (N (+"Pos"), N (+"Increases"))),
+                             Full,
+                             Append_One (+"Inner")))))),
+                F.New_Return)),
+          Full,
+          Append_One (+"Limit")));
+
+      return Result;
+   end Repeated_Merge;
+
+   -----------------
+   -- Scalar_Type --
+   -----------------
+
+   function Scalar_Type
+     (Item : Field_Descriptor;
+      Ctx  : Context) return Universal_String is
+   begin
+      case Item.PB_Type.Value is
+         when TYPE_INT32 | TYPE_SINT32 | TYPE_SFIXED32 =>
+            return +"Interfaces.Integer_32";
+         when TYPE_INT64 | TYPE_SINT64 | TYPE_SFIXED64 =>
+            return +"Interfaces.Integer_64";
+         when TYPE_UINT32 | TYPE_FIXED32 =>
+            return +"Interfaces.Unsigned_32";
+         when TYPE_UINT64 | TYPE_FIXED64 =>
+            return +"Interfaces.Unsigned_64";
+         when TYPE_FLOAT =>
+            return +"PB_SPARK.Float_32_Bits";
+         when TYPE_DOUBLE =>
+            return +"PB_SPARK.Float_64_Bits";
+         when TYPE_BOOL =>
+            return +"Boolean";
+         when TYPE_ENUM | TYPE_MESSAGE =>
+            declare
+               Named : constant Compiler.Context.Ada_Type_Name :=
+                 Compiler.Context.Named_Types (Item.Type_Name.Value).Ada_Type;
+            begin
+               --  Any component of a record hides a type with the same name
+               --  in the rest of the record, so types are always named with
+               --  their package.
+               return Expanded (Compiler.Context."+" (Named), Ctx);
+            end;
+         when TYPE_STRING | TYPE_BYTES | TYPE_GROUP =>
+            raise Program_Error;  --  Handled by Element_Type, or rejected
+      end case;
+   end Scalar_Type;
+
+   -----------------
+   -- Skip_Unless --
+   -----------------
+
+   function Skip_Unless (Kinds : Universal_String) return Node is
+     (F.New_If
+        (Condition => N ("Wire not in " & Kinds),
+         Then_Path => F.New_List
+           (Call (+Wire & "Skip_Field", +"Buffer|Limit|Field|Wire|Pos|Status"),
+            F.New_Return)));
+
    -------------
    -- To_Wire --
    -------------
@@ -851,45 +1893,6 @@ package body Compiler.SPARK_Fields is
       end case;
    end To_Wire;
 
-   ---------------
-   -- Type_Text --
-   ---------------
-
-   function Type_Text
-     (Item : Field_Descriptor;
-      Ctx  : Context) return Universal_String is
-   begin
-      case Item.PB_Type.Value is
-         when TYPE_INT32 | TYPE_SINT32 | TYPE_SFIXED32 =>
-            return +"Interfaces.Integer_32";
-         when TYPE_INT64 | TYPE_SINT64 | TYPE_SFIXED64 =>
-            return +"Interfaces.Integer_64";
-         when TYPE_UINT32 | TYPE_FIXED32 =>
-            return +"Interfaces.Unsigned_32";
-         when TYPE_UINT64 | TYPE_FIXED64 =>
-            return +"Interfaces.Unsigned_64";
-         when TYPE_FLOAT =>
-            return +"PB_SPARK.Float_32_Bits";
-         when TYPE_DOUBLE =>
-            return +"PB_SPARK.Float_64_Bits";
-         when TYPE_BOOL =>
-            return +"Boolean";
-         when TYPE_ENUM | TYPE_MESSAGE =>
-            declare
-               Named : constant Compiler.Context.Ada_Type_Name :=
-                 Compiler.Context.Named_Types (Item.Type_Name.Value).Ada_Type;
-            begin
-               --  Any component of a record hides a type with the same name
-               --  in the rest of the record, so types are always named with
-               --  their package.
-               return Compiler.Context.Relative_Name
-                 (Compiler.Context."+" (Named), Ctx.Package_Name);
-            end;
-         when TYPE_STRING | TYPE_BYTES | TYPE_GROUP =>
-            raise Program_Error;  --  Rejected by Check_Supported
-      end case;
-   end Type_Text;
-
    ------------------
    -- Type_Package --
    ------------------
@@ -905,5 +1908,65 @@ package body Compiler.SPARK_Fields is
          return +"";
       end if;
    end Type_Package;
+
+   -----------
+   -- Types --
+   -----------
+
+   function Types
+     (Self   : Item;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access
+   is
+      Result   : Node;
+      Literals : Node;
+      Paths    : Node;
+   begin
+      for Field of Self.Fields loop
+         Result := Join (Result, Field_Types (Field, Ctx, Bounds));
+      end loop;
+
+      if not Self.Is_Oneof then
+         return Result;
+      end if;
+
+      Literals := F.New_Argument_Association (N (Not_Set (Self)));
+      Paths := F.New_Case_Path (N (Not_Set (Self)), F.New_Statement);
+
+      for Field of Self.Fields loop
+         declare
+            Default : constant Universal_String := Default_Text (Field, Ctx);
+         begin
+            Literals := F.New_List
+              (Literals, F.New_Argument_Association (N (Literal (Field))));
+            Paths := F.New_List
+              (Paths,
+               F.New_Case_Path
+                 (N (Literal (Field)),
+                  F.New_Variable
+                    (Name            => N (Component_Name (Field)),
+                     Type_Definition => N (Element_Type (Field, Ctx)),
+                     Initialization  =>
+                       (if Default.Is_Empty then null else N (Default)))));
+         end;
+      end loop;
+
+      return F.New_List
+        (Result,
+         F.New_List
+           (F.New_Type
+              (Name       => N (Kind_Type (Self, Ctx)),
+               Definition => F.New_Parentheses (Literals)),
+            F.New_Type
+              (Name          => N (Variant_Type (Self, Ctx)),
+               Discriminants => F.New_Parameter
+                 (Name            => N (Self.Name),
+                  Type_Definition => N (Kind_Type (Self, Ctx)),
+                  Initialization  => N (Not_Set (Self))),
+               Definition    => F.New_Record
+                 (Components => F.New_Case
+                    (Expression => N (Self.Name),
+                     List       => Paths)))));
+   end Types;
 
 end Compiler.SPARK_Fields;

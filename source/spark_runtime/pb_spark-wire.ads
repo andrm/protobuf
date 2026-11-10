@@ -148,6 +148,21 @@ package PB_SPARK.Wire with SPARK_Mode, Pure is
                   and then Last <= Buffer'Last - Tag_Size (Field),
           Post => Last = Last'Old + Tag_Size (Field);
 
+   procedure Put_Fixed_32
+     (Value  : Unsigned_32;
+      Buffer : in out Byte_Array;
+      Last   : in out Index)
+     with Pre  => Valid_Buffer (Buffer) and then Last <= Buffer'Last - 4,
+          Post => Last = Last'Old + 4;
+   --  Write a fixed32 value without a tag, as in packed fields
+
+   procedure Put_Fixed_64
+     (Value  : Unsigned_64;
+      Buffer : in out Byte_Array;
+      Last   : in out Index)
+     with Pre  => Valid_Buffer (Buffer) and then Last <= Buffer'Last - 8,
+          Post => Last = Last'Old + 8;
+
    procedure Put_Varint_Field
      (Field  : Field_Number;
       Value  : Unsigned_64;
@@ -297,7 +312,8 @@ package PB_SPARK.Wire with SPARK_Mode, Pure is
       Value  : out Unsigned_32;
       Status : out Status_Kind)
      with Pre  => Valid_Reader (Buffer, Limit, Pos),
-          Post => Pos in Pos'Old .. Limit + 1;
+          Post => Pos in Pos'Old .. Limit + 1
+                  and then (if Status = OK then Pos = Pos'Old + 4);
 
    procedure Get_Fixed_64
      (Buffer : Byte_Array;
@@ -306,7 +322,8 @@ package PB_SPARK.Wire with SPARK_Mode, Pure is
       Value  : out Unsigned_64;
       Status : out Status_Kind)
      with Pre  => Valid_Reader (Buffer, Limit, Pos),
-          Post => Pos in Pos'Old .. Limit + 1;
+          Post => Pos in Pos'Old .. Limit + 1
+                  and then (if Status = OK then Pos = Pos'Old + 8);
 
    procedure Get_Delimited
      (Buffer      : Byte_Array;

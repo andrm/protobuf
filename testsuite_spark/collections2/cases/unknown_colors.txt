@@ -1,0 +1,4 @@
+must: "ab"
+colors: [1, 7, 2]
+packed_colors: [7, 2]
+c: 9

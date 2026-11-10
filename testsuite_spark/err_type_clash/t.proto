@@ -1,0 +1,3 @@
+syntax = "proto3";
+message M { string s = 1; }
+message M_S_String { }

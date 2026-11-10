@@ -1,0 +1,19 @@
+Coll.name max_length:8
+Coll.blob max_size:4
+Coll.nums max_count:5
+Coll.fx max_count:3
+Coll.tags max_count:2 max_length:3
+Coll.items max_count:2
+Coll.s max_length:4
+Coll.counts max_count:2
+Coll.CountsEntry.key max_length:4
+Coll.moods max_count:4
+Coll.ds max_count:2
+Coll.blobs max_count:2 max_size:2
+Coll.by_id max_count:2
+Coll.flags max_count:3
+Coll.zz max_count:2
+Coll.sf max_count:2
+CollAlt.* max_count:10
+CollAlt.name max_size:16
+CollRaw.nums max_size:4

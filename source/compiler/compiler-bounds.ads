@@ -45,6 +45,11 @@ package Compiler.Bounds is
       --  Maximum number of elements of a repeated field
       Max_Size        : Natural := 0;
       --  Maximum encoded size of the field, including tags
+      Value_Size      : Natural := 0;
+      --  Maximum encoded size of one value, without its tag. The length
+      --  prefix of a string, bytes or message value is included.
+      Is_Packed       : Boolean := False;
+      --  The field is repeated and its values are written packed
       On_Unknown_Enum : Compiler.Options.Unknown_Enum_Policy :=
         Compiler.Options.Reject;
    end record;
@@ -70,6 +75,12 @@ package Compiler.Bounds is
       Type_Name : League.Strings.Universal_String) return Natural;
    --  Return the maximum encoded size of a message checked by Analyze, whose
    --  name is written the way descriptors do, as in .my.pkg.Message
+
+   function Is_Sized
+     (Self      : Analysis;
+      Type_Name : League.Strings.Universal_String) return Boolean;
+   --  Return True if Analyze calculated the size of a message, which is so for
+   --  messages of the files to generate and for messages they use
 
 private
 

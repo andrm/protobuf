@@ -1,0 +1,46 @@
+syntax = "proto2";
+
+package two;
+
+enum Color {
+  RED = 1;
+  GREEN = 2;
+}
+
+message Req {
+  required int32 id = 1;
+}
+
+message Coll2 {
+  optional string name = 1 [default = "h\303\251llo"];
+  optional bytes blob = 2 [default = "a\001\377\"\\"];
+  repeated int32 nums = 3;
+  repeated sint64 packed_nums = 4 [packed = true];
+  repeated Color colors = 5;
+  repeated Req reqs = 6;
+  oneof choice {
+    string s = 7;
+    Req r = 8;
+    double d = 9;
+    Color c = 10;
+  }
+  repeated bool flags = 11 [packed = true];
+  repeated Color packed_colors = 12 [packed = true];
+  required string must = 13;
+  map<string, Req> named = 14;
+}
+
+// The same field numbers, encoded another way and without required fields
+message LooseReq {
+  optional int32 id = 1;
+}
+
+message Coll2Alt {
+  repeated int32 colors = 5;
+  repeated LooseReq reqs = 6;
+  optional LooseReq r = 8;
+  optional int32 c = 10;
+  repeated int32 packed_colors = 12 [packed = true];
+  optional string must = 13;
+  map<string, LooseReq> named = 14;
+}

@@ -524,6 +524,17 @@ procedure PB_SPARK_Test is
       Pos := 2;
       Get_Fixed_64 (Buffer, Last, Pos, Value, Status);
       Check (Value = Max_U64, "fixed64 high bits");
+
+      --  Packed values have no tag
+      Buffer := (others => 0);
+      Last := 0;
+      Put_Fixed_32 (16#0A0B_0C0D#, Buffer, Last);
+      Put_Fixed_64 (16#0102_0304_0506_0708#, Buffer, Last);
+      Check
+        (Same (Buffer, Last,
+               (16#0D#, 16#0C#, 16#0B#, 16#0A#, 16#08#, 16#07#, 16#06#,
+                16#05#, 16#04#, 16#03#, 16#02#, 16#01#)),
+         "fixed values without tags");
    end Test_Fixed;
 
    ----------------

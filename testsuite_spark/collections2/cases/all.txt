@@ -1,0 +1,13 @@
+name: ""
+blob: "xy"
+nums: 1
+nums: -2
+packed_nums: [-3, 4]
+colors: [GREEN, RED]
+reqs { id: 1 }
+reqs { id: -1 }
+d: 2.5
+flags: [true]
+packed_colors: [RED]
+must: "ok"
+named { key: "a" value { id: 3 } }

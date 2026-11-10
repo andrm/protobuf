@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package inner;
+
+message Thing {
+  repeated int32 values = 1;
+}
+
+enum Shade {
+  LIGHT = 0;
+  DARK = 1;
+}

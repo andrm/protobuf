@@ -91,32 +91,7 @@ package body Compiler.SPARK_Messages is
    function Key (Self : Message_Descriptor; Prefix : Universal_String)
      return Universal_String is (Prefix & "." & Self.Name.Value);
 
-   function Fields_Of
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Bounds : Compiler.Bounds.Analysis) return Natural;
-   --  Return the number of fields that aren't ignored
-
-   function Nth_Field
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Bounds : Compiler.Bounds.Analysis;
-      Index  : Positive)
-      return Google.Protobuf.Descriptor.Field_Descriptor_Proto;
-   --  Return a field by its position among fields that aren't ignored
-
-   function Field_Max
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Bounds : Compiler.Bounds.Analysis;
-      Index  : Positive) return Natural;
-   --  Return maximum encoded size of a field that isn't ignored
-
-   function Full_Field_Name
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Item   : Google.Protobuf.Descriptor.Field_Descriptor_Proto)
-      return Universal_String;
+   subtype Item_List is Compiler.SPARK_Fields.Item_Vectors.Vector;
 
    function Parts (Count : Natural) return Natural is
      ((Count + Fields_In_Part - 1) / Fields_In_Part);
@@ -128,22 +103,18 @@ package body Compiler.SPARK_Messages is
      (Natural'Min (Part * Fields_In_Part, Count));
 
    function Part_Parameters
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Ctx    : Compiler.SPARK_Fields.Context;
-      Bounds : Compiler.Bounds.Analysis;
-      Part   : Positive) return Node;
+     (Items : Item_List;
+      Ctx   : Compiler.SPARK_Fields.Context;
+      Part  : Positive) return Node;
 
    function Part_Actuals
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Ctx    : Compiler.SPARK_Fields.Context;
-      Bounds : Compiler.Bounds.Analysis;
-      Part   : Positive) return Node;
+     (Items : Item_List;
+      Ctx   : Compiler.SPARK_Fields.Context;
+      Part  : Positive) return Node;
 
    function Part_Size
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
+     (Items  : Item_List;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Natural;
 
@@ -152,34 +123,35 @@ package body Compiler.SPARK_Messages is
    function Decode_Parameters (Tipe : Universal_String) return Node;
 
    function Make_Context
-     (Self         : Message_Descriptor;
-      Prefix       : Universal_String;
-      Package_Name : Universal_String;
+     (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Package_Name : League.Strings.Universal_String;
       Is_Proto_3   : Boolean) return Compiler.SPARK_Fields.Context is
      ((Package_Name => Package_Name,
        Message      => Key (Self, Prefix).Tail_From (2),
-       Is_Proto_3   => Is_Proto_3));
+       Type_Name    => Spec_Name (Self, Prefix),
+       Is_Proto_3   => Is_Proto_3,
+       Is_Map_Entry => Self.Options.Is_Set
+         and then Self.Options.Value.Map_Entry.Is_Set
+         and then Self.Options.Value.Map_Entry.Value));
+
    function Merge_Parameters (Tipe : Universal_String) return Node;
 
    function Encode_Part
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
+     (Items  : Item_List;
       Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node;
 
    function Merge_Part
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
+     (Items  : Item_List;
       Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node;
 
    function Part_Choice
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Bounds : Compiler.Bounds.Analysis;
-      Part   : Positive) return Node;
+     (Items : Item_List;
+      Part  : Positive) return Node;
 
    function Skip_Call return Node is
      (F.New_Statement
@@ -226,6 +198,37 @@ package body Compiler.SPARK_Messages is
       return Result;
    end Contract;
 
+   --------------------
+   -- Declared_Names --
+   --------------------
+
+   procedure Declared_Names
+     (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Ctx          : Compiler.SPARK_Fields.Context;
+      Bounds       : Compiler.Bounds.Analysis;
+      Types        : in out League.String_Vectors.Universal_String_Vector;
+      Overloadable : in out League.String_Vectors.Universal_String_Vector)
+   is
+      pragma Unreferenced (Prefix);
+      Items : constant Item_List :=
+        Compiler.SPARK_Fields.Items (Self, Ctx, Bounds);
+   begin
+      Types.Append (Ctx.Type_Name);
+      Types.Append (Ctx.Type_Name & "_Max_Encoded_Size");
+      Overloadable.Append (Ctx.Type_Name & "_Merge_Field");
+
+      for Part in 1 .. Parts (Natural (Items.Length)) loop
+         Overloadable.Append (Ctx.Type_Name & "_Encode_Part_" & Image (Part));
+         Overloadable.Append (Ctx.Type_Name & "_Merge_Part_" & Image (Part));
+      end loop;
+
+      for Item of Items loop
+         Compiler.SPARK_Fields.Declared_Names
+           (Item, Ctx, Types, Overloadable);
+      end loop;
+   end Declared_Names;
+
    -----------------------
    -- Encode_Parameters --
    -----------------------
@@ -265,33 +268,43 @@ package body Compiler.SPARK_Messages is
    -----------------
 
    function Encode_Part
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
+     (Items  : Item_List;
       Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node
    is
-      Count  : constant Natural := Fields_Of (Self, Prefix, Bounds);
       Name   : constant Universal_String :=
-        Spec_Name (Self, Prefix) & "_Encode_Part_" & Image (Part);
+        Ctx.Type_Name & "_Encode_Part_" & Image (Part);
       Size   : constant Universal_String :=
-        Image (Part_Size (Self, Prefix, Bounds, Part));
+        Image (Part_Size (Items, Ctx, Bounds, Part));
       Spec   : constant Node := Specification
         (Name,
          F.New_List
-           ((Part_Parameters (Self, Prefix, Ctx, Bounds, Part),
+           ((Part_Parameters (Items, Ctx, Part),
              In_Out_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
              In_Out_Parameter ("Last", "PB_SPARK.Index"))));
+      Pre    : Universal_String :=
+        +Valid_Buffer & " and then Last <= Buffer'Last - " & Size;
       Total  : Natural := 0;
       Lines  : Node;
    begin
-      for J in Part_First (Part) .. Part_Last (Part, Count) loop
-         Total := Total + Field_Max (Self, Prefix, Bounds, J);
+      for J in Part_First (Part) .. Part_Last (Part, Natural (Items.Length))
+      loop
+         declare
+            Term : constant Universal_String :=
+              Compiler.SPARK_Fields.Precondition (Items (J), Ctx, Bounds);
+         begin
+            if not Term.Is_Empty then
+               Pre := Pre & " and then " & Term;
+            end if;
+         end;
+
+         Total := Total
+           + Compiler.SPARK_Fields.Max_Size (Items (J), Ctx, Bounds);
          Lines := F.New_List
            (Lines,
             F.New_List
-              (Compiler.SPARK_Fields.Encode
-                 (Nth_Field (Self, Prefix, Bounds, J), Ctx, Bounds),
+              (Compiler.SPARK_Fields.Encode (Items (J), Ctx, Bounds),
                F.New_Pragma
                  (N ("Assert"),
                   N ("Last in Start .. Start + " & Image (Total)))));
@@ -301,8 +314,7 @@ package body Compiler.SPARK_Messages is
         (F.New_Subprogram_Declaration
            (Specification => Spec,
             Aspects       => Contract
-              (N (+Valid_Buffer & " and then Last <= Buffer'Last - " & Size),
-               N ("Last in Last'Old .. Last'Old + " & Size))),
+              (N (Pre), N ("Last in Last'Old .. Last'Old + " & Size))),
          F.New_Subprogram_Body
            (Specification => Spec,
             Declarations  => F.New_Variable
@@ -313,58 +325,6 @@ package body Compiler.SPARK_Messages is
                Aspects         => N ("Ghost")),
             Statements    => Lines));
    end Encode_Part;
-
-   ---------------
-   -- Field_Max --
-   ---------------
-
-   function Field_Max
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Bounds : Compiler.Bounds.Analysis;
-      Index  : Positive) return Natural is
-     (Compiler.Bounds.Field
-        (Bounds,
-         Full_Field_Name
-           (Self, Prefix, Nth_Field (Self, Prefix, Bounds, Index))).Max_Size);
-
-   ---------------
-   -- Fields_Of --
-   ---------------
-
-   function Fields_Of
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Bounds : Compiler.Bounds.Analysis) return Natural
-   is
-      Result : Natural := 0;
-   begin
-      for J in 1 .. Self.Field.Length loop
-         if not Compiler.Bounds.Field
-           (Bounds, Full_Field_Name (Self, Prefix, Self.Field (J))).Ignored
-         then
-            Result := Result + 1;
-         end if;
-      end loop;
-
-      return Result;
-   end Fields_Of;
-
-   ---------------------
-   -- Full_Field_Name --
-   ---------------------
-
-   function Full_Field_Name
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Item   : Google.Protobuf.Descriptor.Field_Descriptor_Proto)
-      return Universal_String
-   is
-      Name : constant Universal_String :=
-        Key (Self, Prefix) & "." & Item.Name.Value;
-   begin
-      return Name.Tail_From (2);  --  Without the leading dot
-   end Full_Field_Name;
 
    -----------
    -- Image --
@@ -397,15 +357,13 @@ package body Compiler.SPARK_Messages is
    ----------------
 
    function Merge_Part
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
+     (Items  : Item_List;
       Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Node
    is
-      Count : constant Natural := Fields_Of (Self, Prefix, Bounds);
       Name  : constant Universal_String :=
-        Spec_Name (Self, Prefix) & "_Merge_Part_" & Image (Part);
+        Ctx.Type_Name & "_Merge_Part_" & Image (Part);
       Spec  : constant Node := Specification
         (Name,
          F.New_List
@@ -416,23 +374,16 @@ package body Compiler.SPARK_Messages is
              In_Out_Parameter ("Pos", "PB_SPARK.Index"),
              F.New_Parameter
                (Name            => N ("V"),
-                Type_Definition => N (Spec_Name (Self, Prefix)),
+                Type_Definition => N (Ctx.Type_Name),
                 Is_In           => True,
                 Is_Out          => True),
              Out_Parameter ("Status", "PB_SPARK.Status_Kind"))));
       Paths : Node;
    begin
-      for J in Part_First (Part) .. Part_Last (Part, Count) loop
-         declare
-            Item : constant Google.Protobuf.Descriptor.Field_Descriptor_Proto
-              := Nth_Field (Self, Prefix, Bounds, J);
-         begin
-            Paths := F.New_List
-              (Paths,
-               F.New_Case_Path
-                 (Choice => N (Image (Natural (Item.Number.Value))),
-                  List   => Compiler.SPARK_Fields.Merge (Item, Ctx, Bounds)));
-         end;
+      for J in Part_First (Part) .. Part_Last (Part, Natural (Items.Length))
+      loop
+         Paths := F.New_List
+           (Paths, Compiler.SPARK_Fields.Merge (Items (J), Ctx, Bounds));
       end loop;
 
       Paths := F.New_List
@@ -448,53 +399,21 @@ package body Compiler.SPARK_Messages is
             Statements    => F.New_Case (N ("Field"), Paths)));
    end Merge_Part;
 
-   ---------------
-   -- Nth_Field --
-   ---------------
-
-   function Nth_Field
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Bounds : Compiler.Bounds.Analysis;
-      Index  : Positive)
-      return Google.Protobuf.Descriptor.Field_Descriptor_Proto
-   is
-      Seen : Natural := 0;
-   begin
-      for J in 1 .. Self.Field.Length loop
-         if not Compiler.Bounds.Field
-           (Bounds, Full_Field_Name (Self, Prefix, Self.Field (J))).Ignored
-         then
-            Seen := Seen + 1;
-
-            if Seen = Index then
-               return Self.Field (J);
-            end if;
-         end if;
-      end loop;
-
-      raise Program_Error;
-   end Nth_Field;
-
    ------------------
    -- Part_Actuals --
    ------------------
 
    function Part_Actuals
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Ctx    : Compiler.SPARK_Fields.Context;
-      Bounds : Compiler.Bounds.Analysis;
-      Part   : Positive) return Node
+     (Items : Item_List;
+      Ctx   : Compiler.SPARK_Fields.Context;
+      Part  : Positive) return Node
    is
-      Count  : constant Natural := Fields_Of (Self, Prefix, Bounds);
       Result : Node;
    begin
-      for J in Part_First (Part) .. Part_Last (Part, Count) loop
+      for J in Part_First (Part) .. Part_Last (Part, Natural (Items.Length))
+      loop
          Result := F.New_List
-           (Result,
-            Compiler.SPARK_Fields.Actuals
-              (Nth_Field (Self, Prefix, Bounds, J), Ctx));
+           (Result, Compiler.SPARK_Fields.Actuals (Items (J), Ctx));
       end loop;
 
       return Result;
@@ -505,18 +424,14 @@ package body Compiler.SPARK_Messages is
    -----------------
 
    function Part_Choice
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Bounds : Compiler.Bounds.Analysis;
-      Part   : Positive) return Node
+     (Items : Item_List;
+      Part  : Positive) return Node
    is
-      Count  : constant Natural := Fields_Of (Self, Prefix, Bounds);
       Result : League.String_Vectors.Universal_String_Vector;
    begin
-      for J in Part_First (Part) .. Part_Last (Part, Count) loop
-         Result.Append
-           (Image
-              (Natural (Nth_Field (Self, Prefix, Bounds, J).Number.Value)));
+      for J in Part_First (Part) .. Part_Last (Part, Natural (Items.Length))
+      loop
+         Result.Append (Compiler.SPARK_Fields.Choices (Items (J)));
       end loop;
 
       return N (Result.Join (" | "));
@@ -527,20 +442,16 @@ package body Compiler.SPARK_Messages is
    ---------------------
 
    function Part_Parameters
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
-      Ctx    : Compiler.SPARK_Fields.Context;
-      Bounds : Compiler.Bounds.Analysis;
-      Part   : Positive) return Node
+     (Items : Item_List;
+      Ctx   : Compiler.SPARK_Fields.Context;
+      Part  : Positive) return Node
    is
-      Count  : constant Natural := Fields_Of (Self, Prefix, Bounds);
       Result : Node;
    begin
-      for J in Part_First (Part) .. Part_Last (Part, Count) loop
+      for J in Part_First (Part) .. Part_Last (Part, Natural (Items.Length))
+      loop
          Result := F.New_List
-           (Result,
-            Compiler.SPARK_Fields.Parameters
-              (Nth_Field (Self, Prefix, Bounds, J), Ctx));
+           (Result, Compiler.SPARK_Fields.Parameters (Items (J), Ctx));
       end loop;
 
       return Result;
@@ -551,16 +462,17 @@ package body Compiler.SPARK_Messages is
    ---------------
 
    function Part_Size
-     (Self   : Message_Descriptor;
-      Prefix : Universal_String;
+     (Items  : Item_List;
+      Ctx    : Compiler.SPARK_Fields.Context;
       Bounds : Compiler.Bounds.Analysis;
       Part   : Positive) return Natural
    is
-      Count  : constant Natural := Fields_Of (Self, Prefix, Bounds);
       Result : Natural := 0;
    begin
-      for J in Part_First (Part) .. Part_Last (Part, Count) loop
-         Result := Result + Field_Max (Self, Prefix, Bounds, J);
+      for J in Part_First (Part) .. Part_Last (Part, Natural (Items.Length))
+      loop
+         Result := Result
+           + Compiler.SPARK_Fields.Max_Size (Items (J), Ctx, Bounds);
       end loop;
 
       return Result;
@@ -579,22 +491,29 @@ package body Compiler.SPARK_Messages is
    is
       Ctx    : constant Compiler.SPARK_Fields.Context :=
         Make_Context (Self, Prefix, Package_Name, Is_Proto_3);
-      Tipe   : constant Universal_String := Spec_Name (Self, Prefix);
+      Tipe   : constant Universal_String := Ctx.Type_Name;
       Max    : constant Universal_String := Tipe & "_Max_Encoded_Size";
-      Count  : constant Natural := Fields_Of (Self, Prefix, Bounds);
-      Items  : Node;
+      Items  : constant Item_List :=
+        Compiler.SPARK_Fields.Items (Self, Ctx, Bounds);
+      Count  : constant Natural := Natural (Items.Length);
+      Types  : Node;
+      Parts  : Node;
       Terms  : League.String_Vectors.Universal_String_Vector;
       Result : Node;
    begin
-      for J in 1 .. Count loop
+      for Item of Items loop
          declare
-            Item : constant Google.Protobuf.Descriptor.Field_Descriptor_Proto
-              := Nth_Field (Self, Prefix, Bounds, J);
             Term : constant Universal_String :=
               Compiler.SPARK_Fields.Initialized_Term (Item, Ctx, Bounds);
+            Used : constant Node :=
+              Compiler.SPARK_Fields.Types (Item, Ctx, Bounds);
          begin
-            Items := F.New_List
-              (Items, Compiler.SPARK_Fields.Component (Item, Ctx));
+            if Used /= null then
+               Types := F.New_List (Types, Used);
+            end if;
+
+            Parts := F.New_List
+              (Parts, Compiler.SPARK_Fields.Component (Item, Ctx, Bounds));
 
             if not Term.Is_Empty then
                Terms.Append (Term);
@@ -605,7 +524,7 @@ package body Compiler.SPARK_Messages is
       Result := F.New_List
         ((F.New_Type
             (Name       => N (Tipe),
-             Definition => F.New_Record (Components => Items)),
+             Definition => F.New_Record (Components => Parts)),
           F.New_Statement
             (N (Max & " : constant :="
                 & Natural'Wide_Wide_Image
@@ -614,6 +533,8 @@ package body Compiler.SPARK_Messages is
           F.New_Subprogram_Declaration
             (Specification => Specification
                (+"Clear", Out_Parameter ("V", Tipe.To_Wide_Wide_String)))));
+
+      Result := F.New_List (Types, Result);
 
       if Count = 0 then
          Result := F.New_List
@@ -692,8 +613,10 @@ package body Compiler.SPARK_Messages is
    is
       Ctx   : constant Compiler.SPARK_Fields.Context :=
         Make_Context (Self, Prefix, Package_Name, Is_Proto_3);
-      Tipe  : constant Universal_String := Spec_Name (Self, Prefix);
-      Count : constant Natural := Fields_Of (Self, Prefix, Bounds);
+      Tipe  : constant Universal_String := Ctx.Type_Name;
+      Items : constant Item_List :=
+        Compiler.SPARK_Fields.Items (Self, Ctx, Bounds);
+      Count : constant Natural := Natural (Items.Length);
       Needs : constant Boolean :=
         Compiler.SPARK_Fields.Needs_Check (Key (Self, Prefix), Bounds);
 
@@ -704,10 +627,10 @@ package body Compiler.SPARK_Messages is
       Total        : Natural := 0;
    begin
       for Part in 1 .. Parts (Count) loop
-         Result.Append (Encode_Part (Self, Prefix, Ctx, Bounds, Part));
-         Result.Append (Merge_Part (Self, Prefix, Ctx, Bounds, Part));
+         Result.Append (Encode_Part (Items, Ctx, Bounds, Part));
+         Result.Append (Merge_Part (Items, Ctx, Bounds, Part));
 
-         Total := Total + Part_Size (Self, Prefix, Bounds, Part);
+         Total := Total + Part_Size (Items, Ctx, Bounds, Part);
 
          Append_Calls := F.New_List
            (Append_Calls,
@@ -716,7 +639,7 @@ package body Compiler.SPARK_Messages is
                  (F.New_Apply
                     (N (Tipe & "_Encode_Part_" & Image (Part)),
                      F.New_List
-                       ((Part_Actuals (Self, Prefix, Ctx, Bounds, Part),
+                       ((Part_Actuals (Items, Ctx, Part),
                          F.New_Argument_Association (N ("Buffer")),
                          F.New_Argument_Association (N ("Last")))))),
                F.New_Pragma
@@ -726,7 +649,7 @@ package body Compiler.SPARK_Messages is
          Merge_Paths := F.New_List
            (Merge_Paths,
             F.New_Case_Path
-              (Choice => Part_Choice (Self, Prefix, Bounds, Part),
+              (Choice => Part_Choice (Items, Part),
                List   => F.New_Statement
                  (F.New_Apply
                     (N (Tipe & "_Merge_Part_" & Image (Part)),
@@ -740,11 +663,9 @@ package body Compiler.SPARK_Messages is
                          F.New_Argument_Association (N ("Status"))))))));
       end loop;
 
-      for J in 1 .. Count loop
+      for Item of Items loop
          Clear_Lines := F.New_List
-           (Clear_Lines,
-            Compiler.SPARK_Fields.Clear
-              (Nth_Field (Self, Prefix, Bounds, J), Ctx));
+           (Clear_Lines, Compiler.SPARK_Fields.Clear (Item, Ctx, Bounds));
       end loop;
 
       if Count = 0 then

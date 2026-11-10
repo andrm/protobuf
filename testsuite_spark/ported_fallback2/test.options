@@ -1,2 +1,2 @@
-M.T.field type:ignore
-T.field type:ignore
+M.T.field max_length:16
+T.field max_length:16

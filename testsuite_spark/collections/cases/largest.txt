@@ -1,0 +1,20 @@
+name: "12345678"
+blob: "\377\377\377\377"
+nums: [-1, -1, -1, -1, -1]
+fx: [4294967295, 4294967295, 4294967295]
+tags: "abc"
+tags: "def"
+items { id: -1 other: -1 }
+items { id: -1 other: -1 }
+m { id: -1 other: -1 }
+counts { key: "abcd" value: -1 }
+counts { key: "abce" value: -1 }
+moods: [SAD, SAD, SAD, SAD]
+ds: [-1e300, 1e300]
+blobs: "\377\377"
+blobs: "\377\377"
+by_id { key: -1 value { id: -1 other: -1 } }
+by_id { key: -2 value { id: -1 other: -1 } }
+flags: [true, true, true]
+zz: [-9223372036854775808, -9223372036854775808]
+sf: [-1, -1]

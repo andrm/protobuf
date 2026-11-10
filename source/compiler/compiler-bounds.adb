@@ -125,8 +125,10 @@ package body Compiler.Bounds is
         (Item       : Field_Descriptor;
          Bounds     : Field_Bounds;
          Is_Proto_3 : Boolean;
+         Value      : out Size;
          Too_Big    : in out Boolean) return Size;
-      --  Return maximum encoded size of a field that is not ignored
+      --  Return maximum encoded size of a field that is not ignored, and the
+      --  maximum size of one of its values
 
       procedure Message_Size
         (Name    : Universal_String;
@@ -220,10 +222,10 @@ package body Compiler.Bounds is
         (Item       : Field_Descriptor;
          Bounds     : Field_Bounds;
          Is_Proto_3 : Boolean;
+         Value      : out Size;
          Too_Big    : in out Boolean) return Size
       is
-         Tag   : constant Size := Tag_Size (Item);
-         Value : Size;
+         Tag : constant Size := Tag_Size (Item);
       begin
          case Item.PB_Type.Value is
             when TYPE_BOOL =>
@@ -296,12 +298,15 @@ package body Compiler.Bounds is
             begin
                if not Bounds.Ignored then
                   declare
-                     Current : constant Size :=
-                       Field_Size (Item, Bounds, Info.Is_Proto_3, Too_Big);
+                     Element : Size;
+                     Current : constant Size := Field_Size
+                       (Item, Bounds, Info.Is_Proto_3, Element, Too_Big);
+                     Target  : Field_Bounds renames Result.Fields.Reference
+                       (Dotted (Info.Full_Name, Item.Name.Value));
                   begin
-                     Result.Fields.Reference
-                       (Dotted (Info.Full_Name, Item.Name.Value)).Max_Size :=
-                         Natural (Current);
+                     Target.Max_Size := Natural (Current);
+                     Target.Value_Size := Natural (Clamp (Element));
+                     Target.Is_Packed := Is_Packed (Item, Info.Is_Proto_3);
 
                      if Compiler.Field_Descriptors.Is_One_Of (Item) then
                         declare
@@ -522,6 +527,17 @@ package body Compiler.Bounds is
    begin
       return Self.Fields (Full_Name);
    end Field;
+
+   --------------
+   -- Is_Sized --
+   --------------
+
+   function Is_Sized
+     (Self      : Analysis;
+      Type_Name : League.Strings.Universal_String) return Boolean is
+   begin
+      return Self.Sizes.Contains (Type_Name);
+   end Is_Sized;
 
    ---------------
    -- Is_Packed --

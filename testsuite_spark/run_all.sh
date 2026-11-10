@@ -15,10 +15,14 @@
 #
 # Generated code must compile under the runtime's restrictions and, when
 # gnatprove is installed, prove with no warnings.
+#
+# Usage: run_all.sh [OUTPUT_DIRECTORY [TEST...]]
 
 TESTS=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$TESTS/.." && pwd)
 OUT="${1:-${TMPDIR:-/tmp}/proto_spark}"
+shift
+ONLY=" $* "   # Names of tests to run, after the output directory
 FAILS=0
 
 fail() {
@@ -194,8 +198,10 @@ G
 }
 
 for J in "$TESTS"/*; do
-  if [ -d "$J" ]; then
-    NAME=$(basename "$J")
+  NAME=$(basename "$J")
+
+  if [ -d "$J" ] && { [ "$ONLY" = "  " ] || [[ "$ONLY" == *" $NAME "* ]]; }
+  then
     BEFORE=$FAILS
     FAILS=0
     run_case "$J"

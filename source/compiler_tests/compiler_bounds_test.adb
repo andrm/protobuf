@@ -472,14 +472,15 @@ procedure Compiler_Bounds_Test is
             F ("b", 3, TYPE_BYTES),
             F ("e", 4, TYPE_ENUM, Tipe => ".p.E"),
             F ("i", 5, TYPE_STRING),
-            F ("n", 6, TYPE_INT32));
+            F ("n", 6, TYPE_INT32),
+            F ("r", 7, TYPE_SINT32, LABEL_REPEATED));
          B : Compiler.Bounds.Field_Bounds;
       begin
          Run
            ((1 => File ("a.proto", (1 => M ("A", Fields)))),
             "A.s max_length:4 max_count:7|A.t max_size:5|A.b max_size:6|"
             & "A.e on_unknown_enum:first|A.i type:ignore|"
-            & "A.n max_length:3 max_count:3",
+            & "A.n max_length:3 max_count:3|A.r max_count:2",
             Result,
             E);
          Check (E.Is_Empty, "field bounds have no errors");
@@ -497,8 +498,16 @@ procedure Compiler_Bounds_Test is
          B := Compiler.Bounds.Field (Result, +"p.A.n");
          Check (B.Capacity = 0 and B.Count = 0, "inapplicable options");
          Check (B.Max_Size = 11, "field size is recorded");
+         Check (B.Value_Size = 10 and not B.Is_Packed, "int32 value size");
          B := Compiler.Bounds.Field (Result, +"p.A.t");
          Check (B.Max_Size = 6, "string field size is recorded");
+         Check (B.Value_Size = 5, "string value size has its length");
+         B := Compiler.Bounds.Field (Result, +"p.A.s");
+         Check (B.Value_Size = 5 and not B.Is_Packed, "strings aren't packed");
+         Check (B.Max_Size = 7 * 6, "repeated string size");
+         B := Compiler.Bounds.Field (Result, +"p.A.r");
+         Check (B.Value_Size = 5 and B.Is_Packed, "packed value size");
+         Check (B.Max_Size = 1 + 1 + 2 * 5, "packed size");
       end;
    end Test_Errors;
 

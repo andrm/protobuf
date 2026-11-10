@@ -24,6 +24,7 @@
 
 with Ada_Pretty;
 
+with League.String_Vectors;
 with League.Strings;
 
 with Google.Protobuf.Compiler.Plugin;
@@ -41,6 +42,14 @@ package Compiler.SPARK_Enums is
       return League.Strings.Universal_String;
    --  Return the Ada literal of the enum value named Value_Name in the enum
    --  Type_Name, written as in descriptors (.my.pkg.Enum)
+
+   procedure Declared_Names
+     (Self         : Google.Protobuf.Descriptor.Enum_Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Types        : in out League.String_Vectors.Universal_String_Vector;
+      Overloadable : in out League.String_Vectors.Universal_String_Vector);
+   --  Append the name of the type, and the names of its literals and
+   --  subprograms, which can be overloaded
 
    function Public_Spec
      (Self   : Google.Protobuf.Descriptor.Enum_Descriptor_Proto;

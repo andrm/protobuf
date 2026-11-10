@@ -26,11 +26,13 @@ with Ada.Containers.Vectors;
 
 with Ada_Pretty;
 
+with League.String_Vectors;
 with League.Strings;
 
 with Google.Protobuf.Descriptor;
 
 with Compiler.Bounds;
+with Compiler.SPARK_Fields;
 
 package Compiler.SPARK_Messages is
 
@@ -50,6 +52,25 @@ package Compiler.SPARK_Messages is
         new Wide_Wide_String'("merge"),
         new Wide_Wide_String'("is_initialized"));
    --  Names of subprograms declared for every message, in lower case
+
+   function Make_Context
+     (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Package_Name : League.Strings.Universal_String;
+      Is_Proto_3   : Boolean) return Compiler.SPARK_Fields.Context;
+   --  Return the context of the fields of a message. Prefix is the type name
+   --  prefix of the message, like .my.pkg
+
+   procedure Declared_Names
+     (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Ctx          : Compiler.SPARK_Fields.Context;
+      Bounds       : Compiler.Bounds.Analysis;
+      Types        : in out League.String_Vectors.Universal_String_Vector;
+      Overloadable : in out League.String_Vectors.Universal_String_Vector);
+   --  Append the names that the code of a message declares in its package:
+   --  names of types and constants, and names that can be overloaded, other
+   --  than Subprogram_Names
 
    function Public_Spec
      (Self         : Google.Protobuf.Descriptor.Descriptor_Proto;

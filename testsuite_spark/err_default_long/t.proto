@@ -1,0 +1,1 @@
+syntax = "proto2"; message M { optional string s = 1 [default = "abc"]; }

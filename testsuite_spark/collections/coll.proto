@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+message Item {
+  int32 id = 1;
+  int32 other = 2;
+}
+
+enum Mood {
+  CALM = 0;
+  HAPPY = 1;
+  SAD = -2;
+}
+
+message Coll {
+  string name = 1;
+  bytes blob = 2;
+  repeated int32 nums = 3;
+  repeated fixed32 fx = 4;
+  repeated string tags = 5;
+  repeated Item items = 6;
+  oneof choice {
+    int32 a = 7;
+    string s = 8;
+    Item m = 9;
+  }
+  map<string, int32> counts = 10;
+  repeated Mood moods = 11;
+  repeated double ds = 12;
+  repeated bytes blobs = 13;
+  map<int32, Item> by_id = 14;
+  repeated bool flags = 15;
+  repeated sint64 zz = 16;
+  repeated sfixed64 sf = 17;
+}
+
+// The same field numbers, encoded another way
+message CollAlt {
+  bytes name = 1;
+  repeated int32 nums = 3 [packed = false];
+  repeated fixed32 fx = 4 [packed = false];
+  fixed64 tags = 5;
+  fixed32 items = 6;
+  repeated int32 moods = 11 [packed = false];
+  repeated bool flags = 15 [packed = false];
+}
+
+// Packed field 3 as raw bytes, to send a payload that ends inside a value
+message CollRaw {
+  fixed32 pad = 1;
+  bytes nums = 3;
+}

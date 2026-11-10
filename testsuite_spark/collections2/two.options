@@ -1,0 +1,15 @@
+Coll2.name max_length:6
+Coll2.blob max_size:5
+Coll2.nums max_count:3
+Coll2.packed_nums max_count:3
+Coll2.colors max_count:3
+Coll2.reqs max_count:2
+Coll2.s max_length:3
+Coll2.flags max_count:2
+Coll2.packed_colors max_count:3
+Coll2.must max_length:2
+Coll2.named max_count:2
+Coll2.NamedEntry.key max_length:2
+Coll2Alt.* max_count:5
+Coll2Alt.must max_length:3
+Coll2Alt.NamedEntry.key max_length:2

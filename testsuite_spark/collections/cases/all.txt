@@ -1,0 +1,19 @@
+name: "hello"
+blob: "\001\002\003\004"
+nums: [1, -1, 300, 0, 2147483647]
+fx: [1, 4294967295, 0]
+tags: "ab"
+tags: "c"
+items { id: 5 }
+items { }
+s: "wxyz"
+counts { key: "k1" value: 3 }
+counts { key: "" value: 0 }
+moods: [HAPPY, CALM, SAD]
+ds: [1.5, -0.0]
+blobs: ""
+blobs: "\377\000"
+by_id { key: -1 value { id: 1 other: 2 } }
+flags: [true, false, true]
+zz: [-9223372036854775808, 9223372036854775807]
+sf: [-1, 1]

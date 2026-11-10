@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package outer;
+
+import "inner.proto";
+
+// Named like the imported package, which it hides
+message Inner {
+  inner.Thing thing = 1;
+  repeated inner.Thing things = 2;
+  inner.Shade shade = 3;
+  oneof pick {
+    inner.Thing one = 4;
+    inner.Shade other = 5;
+  }
+}

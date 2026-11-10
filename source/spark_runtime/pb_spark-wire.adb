@@ -358,6 +358,23 @@ package body PB_SPARK.Wire with SPARK_Mode is
       end if;
    end Put_Bytes_Option;
 
+   ------------------
+   -- Put_Fixed_32 --
+   ------------------
+
+   procedure Put_Fixed_32
+     (Value  : Unsigned_32;
+      Buffer : in out Byte_Array;
+      Last   : in out Index) is
+   begin
+      for J in Index range 1 .. 4 loop
+         Buffer (Last + J) :=
+           Byte (Shift_Right (Value, (Natural (J) - 1) * 8) and 255);
+      end loop;
+
+      Last := Last + 4;
+   end Put_Fixed_32;
+
    ------------------------
    -- Put_Fixed_32_Field --
    ------------------------
@@ -369,13 +386,7 @@ package body PB_SPARK.Wire with SPARK_Mode is
       Last   : in out Index) is
    begin
       Put_Tag (Field, Fixed_32, Buffer, Last);
-
-      for J in Index range 1 .. 4 loop
-         Buffer (Last + J) :=
-           Byte (Shift_Right (Value, (Natural (J) - 1) * 8) and 255);
-      end loop;
-
-      Last := Last + 4;
+      Put_Fixed_32 (Value, Buffer, Last);
    end Put_Fixed_32_Field;
 
    -------------------------
@@ -393,6 +404,23 @@ package body PB_SPARK.Wire with SPARK_Mode is
       end if;
    end Put_Fixed_32_Option;
 
+   ------------------
+   -- Put_Fixed_64 --
+   ------------------
+
+   procedure Put_Fixed_64
+     (Value  : Unsigned_64;
+      Buffer : in out Byte_Array;
+      Last   : in out Index) is
+   begin
+      for J in Index range 1 .. 8 loop
+         Buffer (Last + J) :=
+           Byte (Shift_Right (Value, (Natural (J) - 1) * 8) and 255);
+      end loop;
+
+      Last := Last + 8;
+   end Put_Fixed_64;
+
    ------------------------
    -- Put_Fixed_64_Field --
    ------------------------
@@ -404,13 +432,7 @@ package body PB_SPARK.Wire with SPARK_Mode is
       Last   : in out Index) is
    begin
       Put_Tag (Field, Fixed_64, Buffer, Last);
-
-      for J in Index range 1 .. 8 loop
-         Buffer (Last + J) :=
-           Byte (Shift_Right (Value, (Natural (J) - 1) * 8) and 255);
-      end loop;
-
-      Last := Last + 8;
+      Put_Fixed_64 (Value, Buffer, Last);
    end Put_Fixed_64_Field;
 
    -------------------------

@@ -82,6 +82,34 @@ package body Compiler.SPARK_Enums is
    --  values are written with an expanded operator, so units don't need a
    --  use clause.
 
+   --------------------
+   -- Declared_Names --
+   --------------------
+
+   procedure Declared_Names
+     (Self         : Google.Protobuf.Descriptor.Enum_Descriptor_Proto;
+      Prefix       : League.Strings.Universal_String;
+      Types        : in out League.String_Vectors.Universal_String_Vector;
+      Overloadable : in out League.String_Vectors.Universal_String_Vector)
+   is
+      Name    : constant Universal_String := Type_Name (Self, Prefix);
+      Values  : Item_Sets.Set;
+      Aliases : Item_Sets.Set;
+   begin
+      Get_Items (Self, Name, Values, Aliases);
+      Types.Append (Name);
+      Overloadable.Append (Name & "_To_Wire");
+      Overloadable.Append (Name & "_From_Wire");
+
+      for J of Values loop
+         Overloadable.Append (J.Name);
+      end loop;
+
+      for J of Aliases loop
+         Overloadable.Append (J.Name);
+      end loop;
+   end Declared_Names;
+
    ---------------
    -- Get_Items --
    ---------------

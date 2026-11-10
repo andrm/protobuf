@@ -1,0 +1,4 @@
+colors: RED
+colors: GREEN
+packed_colors: GREEN
+must: "ab"
