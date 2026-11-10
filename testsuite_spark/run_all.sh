@@ -17,6 +17,11 @@
 # pragma Assume or Annotate and, when gnatprove is installed, prove with no
 # warnings. Set REQUIRE_PROOF=1 to fail when gnatprove is not installed.
 #
+# Set DIFFERENTIAL=N to also run differential.py on each round trip test:
+# N random messages, variants of their encodings and corrupted inputs,
+# compared with Python protobuf ($PYTHON, default python3, with the
+# protobuf package). DIFFERENTIAL_SEED picks other random inputs.
+#
 # Usage: run_all.sh [OUTPUT_DIRECTORY [TEST...]]
 
 TESTS=$(cd "$(dirname "$0")" && pwd)
@@ -25,6 +30,13 @@ OUT="${1:-${TMPDIR:-/tmp}/proto_spark}"
 shift
 ONLY=" $* "   # Names of tests to run, after the output directory
 FAILS=0
+PYTHON=${PYTHON:-python3}
+
+if [ -n "$DIFFERENTIAL" ] && ! "$PYTHON" -I -c "import google.protobuf"
+then
+  echo "DIFFERENTIAL needs $PYTHON with the protobuf package"
+  exit 1
+fi
 
 fail() {
   echo "$NAME FAILS: $1"
@@ -208,6 +220,19 @@ G
         fail "$BASE: decoded values differ"
       fi
     done
+
+    if [ -n "$DIFFERENTIAL" ]; then
+      if ! protoc -I"$J" --include_imports \
+          --descriptor_set_out="$OUT/descriptors.pb" "${PROTOS[@]}" \
+        || ! "$PYTHON" -I "$TESTS/differential.py" "$OUT/descriptors.pb" \
+          "$J" "$MESSAGE" "$OUT/rt/roundtrip" "$OUT/differential" \
+          --count "$DIFFERENTIAL" --seed "${DIFFERENTIAL_SEED:-1}" \
+          > "$OUT/differential.log" 2>&1
+      then
+        cat "$OUT/differential.log"
+        fail "differential test"
+      fi
+    fi
   fi
 }
 

@@ -477,7 +477,7 @@ end;
 | `Truncated`        | The input ends in the middle of a value |
 | `Malformed`        | The input is not valid protobuf: a varint over 10 bytes, a key over 5 bytes, field number 0 or above 2^29-1, wire type 6 or 7, unbalanced or too deeply nested groups |
 | `Limit_Exceeded`   | The input doesn't fit the bounds of the options file |
-| `Invalid_UTF8`     | A proto3 string is not valid UTF-8 |
+| `Invalid_UTF8`     | A string is not valid UTF-8. This includes proto2 strings, which other implementations don't check |
 | `Missing_Required` | A proto2 required field is missing |
 | `Unknown_Enum`     | A proto3 enum field holds a value the schema doesn't define, with `on_unknown_enum:reject` |
 
@@ -514,6 +514,19 @@ A map is a repeated field of entries with `Key` and `Value` components.
 Entries are kept in input order, duplicate keys included, so a lookup
 should use the last entry with the key, as protobuf does.
 
+Where protobuf leaves room, decoding is stricter than other implementations:
+
+* Every occurrence of a field is checked, not only the one that wins. A
+  string over its bound or an unknown proto3 enum value fails decoding even
+  if a later occurrence of the field replaces it.
+* Bounds and proto2 required fields are checked for every map entry,
+  duplicate keys included.
+* A tag with field number 0 is `Malformed`. Python's upb parser stops
+  reading there instead.
+* Unknown fields inside a map entry are skipped and the entry is kept, as
+  `protoc` (C++) does. Python's upb parser instead moves the whole entry to
+  the unknown fields of the message that holds the map.
+
 For each enum `Foo` the package also declares `Foo_To_Wire` and
 `Foo_From_Wire`. They convert with a `case` statement rather than
 `Unchecked_Conversion`, so decoding can't create an invalid enum value.
@@ -533,9 +546,18 @@ prove the code generated for yours. `testsuite_spark/run_all.sh` shows the
 switches to use.
 
 That decoding gives back what was encoded is not proved. Tests check it:
-`testsuite_spark/run_all.sh` round-trips `protoc`-encoded input, and
-`conformance_spark.sh` runs Google's conformance tests against code
-generated for `test_messages_proto2.proto` and `test_messages_proto3.proto`.
+
+* `testsuite_spark/run_all.sh` round-trips `protoc`-encoded input.
+* With `DIFFERENTIAL=N` it also runs `testsuite_spark/differential.py`,
+  which compares with Python protobuf. For N random messages within the
+  bounds it checks:
+  * their encodings and variants of them, with fields reordered, unknown
+    fields added, packed fields sent unpacked, and fields sent twice;
+  * corrupted copies, which must not crash, must decode to Python's values
+    when both accept them, and must only be rejected for a reason found by
+    a strict reading of the input, as listed above.
+* `conformance_spark.sh` runs Google's conformance tests against code
+  generated for `test_messages_proto2.proto` and `test_messages_proto3.proto`.
 
 These are trusted rather than proved:
 

@@ -46,5 +46,11 @@ jobs:
         run: alr -C protobuf build
       - name: Prove the SPARK runtime
         run: alr -C protobuf exec -- make prove-spark
-      - name: Prove and round-trip SPARK output tests
-        run: alr -C protobuf exec -- env REQUIRE_PROOF=1 ./testsuite_spark/run_all.sh
+      - name: Install Python protobuf for the differential tests
+        run: |
+          python3 -m venv "$HOME/pb-venv"
+          "$HOME/pb-venv/bin/pip" install protobuf
+      - name: Prove, round-trip and differential SPARK output tests
+        run: >-
+          alr -C protobuf exec -- env REQUIRE_PROOF=1 DIFFERENTIAL=200
+          PYTHON="$HOME/pb-venv/bin/python" ./testsuite_spark/run_all.sh
