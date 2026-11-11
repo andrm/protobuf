@@ -711,6 +711,71 @@ package body Compiler.SPARK_Fields is
       end case;
    end Default_Text;
 
+   function Inner_Context
+     (Type_Name : Universal_String;
+      Ctx       : Context) return Context;
+   --  Return the context of the components of message Type_Name, written as
+   --  .my.pkg.Message, from package Ctx.Package_Name
+
+   function Inner_Context
+     (Type_Name : Universal_String;
+      Ctx       : Context) return Context
+   is
+      Info : constant Message_Info := Messages (Type_Name);
+   begin
+      return
+        (Package_Name => Ctx.Package_Name,
+         Message      => Info.Full_Name,
+         Type_Name    => <>,
+         Is_Proto_3   => Info.Is_Proto_3,
+         Is_Map_Entry => Info.Descriptor.Options.Is_Set
+           and then Info.Descriptor.Options.Value.Map_Entry.Is_Set
+           and then Info.Descriptor.Options.Value.Map_Entry.Value);
+   end Inner_Context;
+
+   function Is_Empty_Message
+     (Type_Name : Universal_String;
+      Ctx       : Context;
+      Bounds    : Compiler.Bounds.Analysis) return Boolean is
+     (Items
+        (Messages (Type_Name).Descriptor,
+         Inner_Context (Type_Name, Ctx),
+         Bounds).Is_Empty);
+   --  Whether message Type_Name is a null record
+
+   -------------
+   -- Has_Box --
+   -------------
+
+   function Has_Box
+     (Type_Name : League.Strings.Universal_String;
+      Ctx       : Context;
+      Bounds    : Compiler.Bounds.Analysis) return Boolean
+   is
+      Inner : constant Context := Inner_Context (Type_Name, Ctx);
+   begin
+      for Self of Items (Messages (Type_Name).Descriptor, Inner, Bounds) loop
+         if not Self.Is_Oneof
+           and then Is_Message (Self.Fields.First_Element)
+         then
+            declare
+               Item    : constant Field_Descriptor :=
+                 Self.Fields.First_Element;
+               Element : constant Universal_String := Item.Type_Name.Value;
+            begin
+               if (Is_Repeated (Item)
+                   and then Is_Empty_Message (Element, Inner, Bounds))
+                 or else Has_Box (Element, Inner, Bounds)
+               then
+                  return True;
+               end if;
+            end;
+         end if;
+      end loop;
+
+      return False;
+   end Has_Box;
+
    -------------------
    -- Default_Value --
    -------------------
@@ -721,14 +786,7 @@ package body Compiler.SPARK_Fields is
       Bounds    : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access
    is
       Info   : constant Message_Info := Messages (Type_Name);
-      Inner  : constant Context :=
-        (Package_Name => Ctx.Package_Name,
-         Message      => Info.Full_Name,
-         Type_Name    => <>,
-         Is_Proto_3   => Info.Is_Proto_3,
-         Is_Map_Entry => Info.Descriptor.Options.Is_Set
-           and then Info.Descriptor.Options.Value.Map_Entry.Is_Set
-           and then Info.Descriptor.Options.Value.Map_Entry.Value);
+      Inner  : constant Context := Inner_Context (Type_Name, Ctx);
       Result : Node;
    begin
       for Self of Items (Info.Descriptor, Inner, Bounds) loop
@@ -867,14 +925,40 @@ package body Compiler.SPARK_Fields is
       Value : constant Node := Value_Default (Item, Ctx, Bounds);
    begin
       if Is_Repeated (Item) then
-         return F.New_List
-           (F.New_Component_Association
-              (Choices => N (Component_Name (Item)),
-               Value   => F.New_Parentheses
+         declare
+            Values : Node;
+         begin
+            --  GNAT needs elaboration code for any aggregate of an array of
+            --  null records, and for a box in an array aggregate with others
+            --  or a range. A box in a named or listed component does not.
+            if Is_Message (Item)
+              and then Is_Empty_Message (Item.Type_Name.Value, Ctx, Bounds)
+            then
+               Values := N (+"<>");
+            elsif Is_Message (Item)
+              and then Has_Box (Item.Type_Name.Value, Ctx, Bounds)
+            then
+               for J in 1 .. Bounds_Of (Item, Ctx, Bounds).Count loop
+                  Values := F.New_List
+                    (Values,
+                     F.New_Component_Association
+                       (Choices => N (Image (J)),
+                        Value   => Value_Default (Item, Ctx, Bounds)));
+               end loop;
+
+               Values := F.New_Parentheses (Values);
+            else
+               Values := F.New_Parentheses
                  (F.New_Component_Association
-                    (Choices => N (+"others"), Value => Value))),
-            F.New_Component_Association
-              (Choices => N (Count_Name (Item)), Value => N (+"0")));
+                    (Choices => N (+"others"), Value => Value));
+            end if;
+
+            return F.New_List
+              (F.New_Component_Association
+                 (Choices => N (Component_Name (Item)), Value => Values),
+               F.New_Component_Association
+                 (Choices => N (Count_Name (Item)), Value => N (+"0")));
+         end;
       elsif Has_Presence (Item, Ctx) then
          return F.New_List
            (F.New_Component_Association

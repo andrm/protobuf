@@ -1,0 +1,5 @@
+direct { } direct { }
+boxes { items { } n: 1 } boxes { items { } items { } items { } }
+one { items { } n: 7 }
+named { key: "a" value { } } named { key: "bc" }
+tail: 9

@@ -739,6 +739,21 @@ package body Compiler.SPARK_Messages is
             Initialization  => Compiler.SPARK_Fields.Default_Value
               (Key (Self, Prefix), Ctx, Bounds),
             Is_Constant     => True);
+
+         if Compiler.SPARK_Fields.Has_Box (Key (Self, Prefix), Ctx, Bounds)
+         then
+            Default := F.New_List
+              ((F.New_Pragma
+                  (N ("Warnings"),
+                   N ("Off, ""component * is uninitialized"", Reason => "
+                      & """Arrays of empty messages have nothing to "
+                      & "initialize""")),
+                Default,
+                F.New_Pragma
+                  (N ("Warnings"),
+                   N ("On, ""component * is uninitialized"""))));
+         end if;
+
          Clear_Lines := F.New_Assignment (N ("V"), N (Tipe & "_Default"));
       end if;
 

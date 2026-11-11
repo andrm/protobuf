@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+// GNAT needs elaboration code for an aggregate of an array of null records,
+// so the default value of a message with a repeated empty message has a box
+// for it, and lists the elements of any array of messages around one
+
+message Nothing {
+}
+
+message Box {
+  repeated Nothing items = 1;
+  int32 n = 2;
+}
+
+message Holder {
+  repeated Nothing direct = 1;
+  repeated Box boxes = 2;
+  Box one = 3;
+  map<string, Nothing> named = 4;
+  int32 tail = 5;
+}

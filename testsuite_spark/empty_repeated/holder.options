@@ -1,0 +1,5 @@
+Box.items max_count:3
+Holder.direct max_count:2
+Holder.boxes max_count:2
+Holder.named max_count:2
+Holder.NamedEntry.key max_length:4

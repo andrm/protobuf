@@ -571,7 +571,9 @@ These are trusted rather than proved:
   so pass them by reference and check the stack with `-fstack-usage`. The
   generated code makes no temporary copies of a message: `Clear` copies a
   constant `Blah_Default` from the package body, written out in full so
-  that it needs no elaboration code.
+  that it needs no elaboration code. The one exception is an array of an
+  empty message, which holds no data: GNAT can't build such an array
+  without elaboration code, so the constant gives it as `<>`.
 
 To check the runtime against the restrictions of light runtimes in
 `source/spark_runtime/restrictions.adc`, build it with

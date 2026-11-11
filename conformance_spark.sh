@@ -62,6 +62,9 @@ PATH=$ROOT/.objs/compiler:$PATH protoc \
   google/protobuf/timestamp.proto \
   google/protobuf/wrappers.proto
 
+# The generated code must also compile for light runtimes, which the testee
+# can't
+gprbuild -c -p -P "$ROOT/gnat/conformance_spark_restrictions.gpr"
 gprbuild -p -P "$ROOT/gnat/conformance_spark.gpr"
 
 # A runner built by conformance.sh needs its libjsoncpp from the cache

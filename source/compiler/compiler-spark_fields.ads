@@ -146,6 +146,17 @@ package Compiler.SPARK_Fields is
    --  an aggregate in package Ctx.Package_Name. Every value is written out,
    --  including those of nested messages, because a box or the name of
    --  another constant would make a constant of it need elaboration code.
+   --  The exception is a repeated field of a message without components,
+   --  which is a box (see Has_Box).
+
+   function Has_Box
+     (Type_Name : League.Strings.Universal_String;
+      Ctx       : Context;
+      Bounds    : Compiler.Bounds.Analysis) return Boolean;
+   --  Whether Default_Value of message Type_Name has a box, so that GNAT
+   --  warns of an uninitialized component. An array of null records needs
+   --  elaboration code however it is written, but a box for one does not,
+   --  and neither SPARK nor the program can read what it leaves out.
 
    function Max_Size
      (Self   : Item;
