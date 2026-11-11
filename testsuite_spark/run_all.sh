@@ -32,10 +32,23 @@ ONLY=" $* "   # Names of tests to run, after the output directory
 FAILS=0
 PYTHON=${PYTHON:-python3}
 
-if [ -n "$DIFFERENTIAL" ] && ! "$PYTHON" -I -c "import google.protobuf"
-then
-  echo "DIFFERENTIAL needs $PYTHON with the protobuf package"
-  exit 1
+if [ -n "$DIFFERENTIAL" ]; then
+  # The pure Python implementation of protobuf disagrees with correct
+  # decoders on corrupted input: it takes a tag written with more bytes than
+  # needed for an unknown field, and IsInitialized misses a map value that
+  # lacks a required field. Fedora's python3-protobuf 3.19 is one.
+  PB_IMPL=$("$PYTHON" -I -c "from google.protobuf.internal import \
+api_implementation as a; print(a.Type())" 2>/dev/null)
+  case "$PB_IMPL" in
+    "")
+      echo "DIFFERENTIAL needs $PYTHON with the protobuf package"
+      exit 1;;
+    python)
+      echo "DIFFERENTIAL needs protobuf with the upb or cpp implementation;"
+      echo "$PYTHON has the pure Python one (pip install protobuf in a venv,"
+      echo "then set PYTHON)"
+      exit 1;;
+  esac
 fi
 
 fail() {

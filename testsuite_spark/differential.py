@@ -133,6 +133,16 @@ def is_required(field):
     return r if r is not None else field.label == FD.LABEL_REQUIRED
 
 
+def has_presence(field):
+    # Older protobuf (3.19, as packaged by Fedora) has no has_presence. Only
+    # singular fields outside a oneof get here: those have presence when
+    # they are messages or in a proto2 file.
+    r = getattr(field, "has_presence", None)
+    if r is not None:
+        return r
+    return field.type == FD.TYPE_MESSAGE or field.file.syntax == "proto2"
+
+
 def is_map(field):
     return (field.type == FD.TYPE_MESSAGE
             and field.message_type.GetOptions().map_entry)
@@ -233,7 +243,7 @@ class Generator:
                 if chosen[field.containing_oneof.name] is not field:
                     continue
             elif not is_required(field) and not is_repeated(field) \
-                    and field.has_presence and rnd.random() < 0.3:
+                    and has_presence(field) and rnd.random() < 0.3:
                 continue
             if field.type == FD.TYPE_MESSAGE and depth >= MAX_DEPTH \
                     and not is_required(field):
