@@ -176,12 +176,56 @@ package body Compiler.SPARK_Messages is
                else ", Reason => """ & (+Reason) & """"))));
    --  Return a pragma that turns a proof warning off or back on
 
+   function Conjunction (Terms : League.String_Vectors.Universal_String_Vector)
+     return Node;
+   --  Return Valid_Buffer and each of Terms joined with "and then", so that
+   --  it can be split in lines. The call comes first because a name there
+   --  would pad the other terms to its length.
+
+   function Append_Cut (Tipe : Universal_String; Total : Natural)
+     return League.String_Vectors.Universal_String_Vector;
+   --  Return what Append knows after its parts have written Total bytes
+
    function Return_Unless_OK return Node is
      (F.New_If
         (Condition => F.New_List
            (N ("Status"),
             F.New_Infix (+"/=", F.New_Selected_Name (+"PB_SPARK.OK"))),
          Then_Path => F.New_Return));
+
+   ----------------
+   -- Append_Cut --
+   ----------------
+
+   function Append_Cut (Tipe : Universal_String; Total : Natural)
+     return League.String_Vectors.Universal_String_Vector
+   is
+      Result : League.String_Vectors.Universal_String_Vector;
+   begin
+      Result.Append
+        ("Start <= Buffer'Last - " & Tipe & "_Max_Encoded_Size");
+      Result.Append ("Last in Start .. Start + " & Image (Total));
+      return Result;
+   end Append_Cut;
+
+   -----------------
+   -- Conjunction --
+   -----------------
+
+   function Conjunction (Terms : League.String_Vectors.Universal_String_Vector)
+     return Node
+   is
+      Result : Node := F.New_Apply
+        (F.New_Selected_Name (+"PB_SPARK.Valid_Buffer"),
+         F.New_Argument_Association (N ("Buffer")));
+   begin
+      for J in 1 .. Terms.Length loop
+         Result := F.New_List
+           (Result, F.New_Infix (+"and then", N (Terms (J))));
+      end loop;
+
+      return Result;
+   end Conjunction;
 
    --------------
    -- Contract --
@@ -216,6 +260,7 @@ package body Compiler.SPARK_Messages is
    begin
       Types.Append (Ctx.Type_Name);
       Types.Append (Ctx.Type_Name & "_Max_Encoded_Size");
+      Types.Append (Ctx.Type_Name & "_Default");
       Overloadable.Append (Ctx.Type_Name & "_Merge_Field");
 
       for Part in 1 .. Parts (Natural (Items.Length)) loop
@@ -283,31 +328,48 @@ package body Compiler.SPARK_Messages is
            ((Part_Parameters (Items, Ctx, Part),
              In_Out_Parameter ("Buffer", "PB_SPARK.Byte_Array"),
              In_Out_Parameter ("Last", "PB_SPARK.Index"))));
+      First  : constant Positive := Part_First (Part);
+      Last   : constant Positive := Part_Last (Part, Natural (Items.Length));
+      Terms  : array (First .. Last) of Universal_String;
       Pre    : Universal_String :=
         +Valid_Buffer & " and then Last <= Buffer'Last - " & Size;
       Total  : Natural := 0;
       Lines  : Node;
    begin
-      for J in Part_First (Part) .. Part_Last (Part, Natural (Items.Length))
-      loop
-         declare
-            Term : constant Universal_String :=
-              Compiler.SPARK_Fields.Precondition (Items (J), Ctx, Bounds);
-         begin
-            if not Term.Is_Empty then
-               Pre := Pre & " and then " & Term;
-            end if;
-         end;
+      for J in First .. Last loop
+         Terms (J) :=
+           Compiler.SPARK_Fields.Precondition (Items (J), Ctx, Bounds);
 
+         if not Terms (J).Is_Empty then
+            Pre := Pre & " and then " & Terms (J);
+         end if;
+      end loop;
+
+      for J in First .. Last loop
          Total := Total
            + Compiler.SPARK_Fields.Max_Size (Items (J), Ctx, Bounds);
-         Lines := F.New_List
-           (Lines,
-            F.New_List
-              (Compiler.SPARK_Fields.Encode (Items (J), Ctx, Bounds),
-               F.New_Pragma
-                 (N ("Assert"),
-                  N ("Last in Start .. Start + " & Image (Total)))));
+
+         declare
+            Cut : League.String_Vectors.Universal_String_Vector;
+         begin
+            Cut.Append ("Start <= Buffer'Last - " & Size);
+            Cut.Append ("Last in Start .. Start + " & Image (Total));
+
+            --  The cut keeps the proof of each field from growing with the
+            --  fields before it, so it must repeat what the fields after it
+            --  need
+            for K in J + 1 .. Last loop
+               if not Terms (K).Is_Empty then
+                  Cut.Append (Terms (K));
+               end if;
+            end loop;
+
+            Lines := F.New_List
+              (Lines,
+               F.New_List
+                 (Compiler.SPARK_Fields.Encode (Items (J), Ctx, Bounds),
+                  F.New_Pragma (N ("Assert_And_Cut"), Conjunction (Cut))));
+         end;
       end loop;
 
       return F.New_List
@@ -622,6 +684,7 @@ package body Compiler.SPARK_Messages is
 
       Result       : Node_Vectors.Vector;
       Clear_Lines  : Node;
+      Default      : Node;
       Append_Calls : Node;
       Merge_Paths  : Node;
       Total        : Natural := 0;
@@ -643,8 +706,8 @@ package body Compiler.SPARK_Messages is
                          F.New_Argument_Association (N ("Buffer")),
                          F.New_Argument_Association (N ("Last")))))),
                F.New_Pragma
-                 (N ("Assert"),
-                  N ("Last in Start .. Start + " & Image (Total)))));
+                 (N ("Assert_And_Cut"),
+                  Conjunction (Append_Cut (Tipe, Total)))));
 
          Merge_Paths := F.New_List
            (Merge_Paths,
@@ -663,19 +726,29 @@ package body Compiler.SPARK_Messages is
                          F.New_Argument_Association (N ("Status"))))))));
       end loop;
 
-      for Item of Items loop
-         Clear_Lines := F.New_List
-           (Clear_Lines, Compiler.SPARK_Fields.Clear (Item, Ctx, Bounds));
-      end loop;
-
+      --  Clear copies a constant: assigning the components one by one makes
+      --  a large message too deep to prove, and an aggregate in Clear would
+      --  be built on the stack
       if Count = 0 then
          Clear_Lines := F.New_Assignment (N ("V"), N ("(null record)"));
          Append_Calls := F.New_Statement;
+      else
+         Default := F.New_Variable
+           (Name            => N (Tipe & "_Default"),
+            Type_Definition => N (Tipe),
+            Initialization  => Compiler.SPARK_Fields.Default_Value
+              (Key (Self, Prefix), Ctx, Bounds),
+            Is_Constant     => True);
+         Clear_Lines := F.New_Assignment (N ("V"), N (Tipe & "_Default"));
       end if;
 
       Merge_Paths := F.New_List
         (Merge_Paths,
          F.New_Case_Path (Choice => N ("others"), List => Skip_Call));
+
+      if Default /= null then
+         Result.Append (Default);
+      end if;
 
       Result.Append
         (F.New_Subprogram_Body

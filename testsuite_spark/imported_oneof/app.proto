@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+import "lib.proto";
+
+message Scene {
+  Shape main = 1;
+  repeated Shape others = 2;
+}

@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+// The default value of App.Scene is written out in full in package App, so
+// the literals of this oneof and enum must name package Lib
+
+enum Color {
+  RED = 0;
+  GREEN = 1;
+}
+
+message Shape {
+  oneof kind {
+    int32 circle = 1;
+    string label = 2;
+  }
+  Color color = 3;
+}

@@ -64,6 +64,7 @@ package body Compiler.SPARK_Fields is
    type Message_Info is record
       Descriptor : Google.Protobuf.Descriptor.Descriptor_Proto;
       Full_Name  : Universal_String;  --  Like my.pkg.Message
+      Is_Proto_3 : Boolean;
    end record;
 
    package Message_Maps is new Ada.Containers.Hashed_Maps
@@ -366,10 +367,17 @@ package body Compiler.SPARK_Fields is
       Ctx    : Context;
       Bounds : Compiler.Bounds.Analysis) return Node;
 
-   function Field_Clear
+   function Value_Default
      (Item   : Field_Descriptor;
       Ctx    : Context;
       Bounds : Compiler.Bounds.Analysis) return Node;
+   --  Return the initial value of one value of a field, written out
+
+   function Field_Defaults
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node;
+   --  Return the component associations of the initial value of a field
 
    function Field_Initialized_Term
      (Item   : Field_Descriptor;
@@ -476,24 +484,6 @@ package body Compiler.SPARK_Fields is
 
       return Result;
    end Choices;
-
-   -----------
-   -- Clear --
-   -----------
-
-   function Clear
-     (Self   : Item;
-      Ctx    : Context;
-      Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access is
-   begin
-      if Self.Is_Oneof then
-         return F.New_Assignment
-           (N ("V." & Self.Name),
-            N ("(" & Self.Name & " => " & Not_Set (Self) & ")"));
-      else
-         return Field_Clear (Self.Fields.First_Element, Ctx, Bounds);
-      end if;
-   end Clear;
 
    ---------------
    -- Component --
@@ -721,6 +711,51 @@ package body Compiler.SPARK_Fields is
       end case;
    end Default_Text;
 
+   -------------------
+   -- Default_Value --
+   -------------------
+
+   function Default_Value
+     (Type_Name : League.Strings.Universal_String;
+      Ctx       : Context;
+      Bounds    : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access
+   is
+      Info   : constant Message_Info := Messages (Type_Name);
+      Inner  : constant Context :=
+        (Package_Name => Ctx.Package_Name,
+         Message      => Info.Full_Name,
+         Type_Name    => <>,
+         Is_Proto_3   => Info.Is_Proto_3,
+         Is_Map_Entry => Info.Descriptor.Options.Is_Set
+           and then Info.Descriptor.Options.Value.Map_Entry.Is_Set
+           and then Info.Descriptor.Options.Value.Map_Entry.Value);
+      Result : Node;
+   begin
+      for Self of Items (Info.Descriptor, Inner, Bounds) loop
+         if Self.Is_Oneof then
+            Result := F.New_List
+              (Result,
+               F.New_Component_Association
+                 (Choices => N (Self.Name),
+                  Value   => F.New_Parentheses
+                    (F.New_Component_Association
+                       (Choices => N (Self.Name),
+                        Value   => N
+                          (Qualified (Type_Name, Not_Set (Self), Inner))))));
+         else
+            Result := F.New_List
+              (Result,
+               Field_Defaults (Self.Fields.First_Element, Inner, Bounds));
+         end if;
+      end loop;
+
+      if Result = null then
+         return N (+"(null record)");
+      else
+         return F.New_Parentheses (Result);
+      end if;
+   end Default_Value;
+
    ------------
    -- Encode --
    ------------
@@ -769,48 +804,6 @@ package body Compiler.SPARK_Fields is
          return Result;
       end if;
    end Expanded;
-
-   ------------------
-   -- Field_Clear --
-   ------------------
-
-   function Field_Clear
-     (Item   : Field_Descriptor;
-      Ctx    : Context;
-      Bounds : Compiler.Bounds.Analysis) return Node
-   is
-      pragma Unreferenced (Bounds);
-      Target  : constant Universal_String := "V." & Component_Name (Item);
-      Default : constant Universal_String := Default_Text (Item, Ctx);
-      Result  : Node;
-   begin
-      if Is_Repeated (Item) then
-         return F.New_List
-           (F.New_Assignment
-              (N (Target),
-               N ("(others => " & Element_Default (Item, Ctx) & ")")),
-            F.New_Assignment (N ("V." & Count_Name (Item)), N (+"0")));
-      elsif Is_Message (Item) then
-         Result := F.New_Statement
-           (F.New_Apply
-              (N (Qualified (Item.Type_Name.Value, +"Clear", Ctx)),
-               F.New_Argument_Association (N (Target))));
-      elsif Is_Text (Item) then
-         Result := F.New_Assignment
-           (N (Target),
-            N (if Default.Is_Empty then +"(others => <>)" else Default));
-      else
-         Result := F.New_Assignment (N (Target), N (Default));
-      end if;
-
-      if Has_Presence (Item, Ctx) then
-         Result := F.New_List
-           (F.New_Assignment (N ("V." & Has_Name (Item)), N (+"False")),
-            Result);
-      end if;
-
-      return Result;
-   end Field_Clear;
 
    ---------------------
    -- Field_Component --
@@ -861,6 +854,38 @@ package body Compiler.SPARK_Fields is
          return Value;
       end if;
    end Field_Component;
+
+   --------------------
+   -- Field_Defaults --
+   --------------------
+
+   function Field_Defaults
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      Value : constant Node := Value_Default (Item, Ctx, Bounds);
+   begin
+      if Is_Repeated (Item) then
+         return F.New_List
+           (F.New_Component_Association
+              (Choices => N (Component_Name (Item)),
+               Value   => F.New_Parentheses
+                 (F.New_Component_Association
+                    (Choices => N (+"others"), Value => Value))),
+            F.New_Component_Association
+              (Choices => N (Count_Name (Item)), Value => N (+"0")));
+      elsif Has_Presence (Item, Ctx) then
+         return F.New_List
+           (F.New_Component_Association
+              (Choices => N (Has_Name (Item)), Value => N (+"False")),
+            F.New_Component_Association
+              (Choices => N (Component_Name (Item)), Value => Value));
+      else
+         return F.New_Component_Association
+           (Choices => N (Component_Name (Item)), Value => Value);
+      end if;
+   end Field_Defaults;
 
    ------------------
    -- Field_Encode --
@@ -1642,20 +1667,22 @@ package body Compiler.SPARK_Fields is
      (Request : Google.Protobuf.Compiler.Plugin.Code_Generator_Request)
    is
       procedure Add
-        (Prefix : Universal_String;
-         Item   : Google.Protobuf.Descriptor.Descriptor_Proto);
+        (Prefix     : Universal_String;
+         Item       : Google.Protobuf.Descriptor.Descriptor_Proto;
+         Is_Proto_3 : Boolean);
 
       procedure Add
-        (Prefix : Universal_String;
-         Item   : Google.Protobuf.Descriptor.Descriptor_Proto)
+        (Prefix     : Universal_String;
+         Item       : Google.Protobuf.Descriptor.Descriptor_Proto;
+         Is_Proto_3 : Boolean)
       is
          Key : constant Universal_String :=
            Compiler.Context.Join (Prefix, Item.Name);
       begin
-         Messages.Include (Key, (Item, Key.Tail_From (2)));
+         Messages.Include (Key, (Item, Key.Tail_From (2), Is_Proto_3));
 
          for J in 1 .. Item.Nested_Type.Length loop
-            Add (Key, Item.Nested_Type (J));
+            Add (Key, Item.Nested_Type (J), Is_Proto_3);
          end loop;
       end Add;
 
@@ -1673,7 +1700,10 @@ package body Compiler.SPARK_Fields is
             end if;
 
             for K in 1 .. File.Message_Type.Length loop
-               Add (Prefix, File.Message_Type (K));
+               Add
+                 (Prefix,
+                  File.Message_Type (K),
+                  File.Syntax.Is_Set and then File.Syntax.Value = +"proto3");
             end loop;
          end;
       end loop;
@@ -1968,5 +1998,25 @@ package body Compiler.SPARK_Fields is
                     (Expression => N (Self.Name),
                      List       => Paths)))));
    end Types;
+
+   -------------------
+   -- Value_Default --
+   -------------------
+
+   function Value_Default
+     (Item   : Field_Descriptor;
+      Ctx    : Context;
+      Bounds : Compiler.Bounds.Analysis) return Node
+   is
+      Default : constant Universal_String := Default_Text (Item, Ctx);
+   begin
+      if Is_Message (Item) then
+         return Default_Value (Item.Type_Name.Value, Ctx, Bounds);
+      elsif Is_Text (Item) and Default.Is_Empty then
+         return N (+"(Length => 0, Data => (others => 0))");
+      else
+         return N (Default);
+      end if;
+   end Value_Default;
 
 end Compiler.SPARK_Fields;

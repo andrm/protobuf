@@ -1,0 +1,3 @@
+main { label: "box" color: GREEN }
+others { circle: 3 }
+others { color: GREEN }

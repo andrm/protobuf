@@ -568,7 +568,10 @@ These are trusted rather than proved:
 * `protoc-gen-ada` itself. Its output is proved each time GNATprove runs
   on it.
 * Stack usage, which SPARK doesn't check. Large bounds make large records,
-  so pass them by reference and check the stack with `-fstack-usage`.
+  so pass them by reference and check the stack with `-fstack-usage`. The
+  generated code makes no temporary copies of a message: `Clear` copies a
+  constant `Blah_Default` from the package body, written out in full so
+  that it needs no elaboration code.
 
 To check the runtime against the restrictions of light runtimes in
 `source/spark_runtime/restrictions.adc`, build it with

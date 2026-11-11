@@ -138,11 +138,14 @@ package Compiler.SPARK_Fields is
       Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access;
    --  Return the record components of the item
 
-   function Clear
-     (Self   : Item;
-      Ctx    : Context;
-      Bounds : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access;
-   --  Return statements that reset the components in record V
+   function Default_Value
+     (Type_Name : League.Strings.Universal_String;
+      Ctx       : Context;
+      Bounds    : Compiler.Bounds.Analysis) return Ada_Pretty.Node_Access;
+   --  Return the initial value of a message, written as .my.pkg.Message, as
+   --  an aggregate in package Ctx.Package_Name. Every value is written out,
+   --  including those of nested messages, because a box or the name of
+   --  another constant would make a constant of it need elaboration code.
 
    function Max_Size
      (Self   : Item;
